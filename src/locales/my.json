@@ -958,7 +958,9 @@
       "model_name": "Nama Model",
       "model_id": "ID Model",
       "description": "Penerangan",
-      "action": "Tindakan"
+      "action": "Tindakan",
+      "enable_toggle_label": "Dayakan",
+      "disabled_hint": "Dilumpuhkan: tidak akan muncul dalam senarai /v1/models"
     },
     "cli_sync": {
       "title": "Segerak CLI Satu-klik",

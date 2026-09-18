@@ -1179,7 +1179,9 @@
       "model_name": "模型名称",
       "model_id": "模型 ID",
       "description": "描述",
-      "action": "操作"
+      "action": "操作",
+      "enable_toggle_label": "启用",
+      "disabled_hint": "已禁用：不会出现在 /v1/models 列表中"
     },
     "cli_sync": {
       "title": "CLI 配置一键同步",

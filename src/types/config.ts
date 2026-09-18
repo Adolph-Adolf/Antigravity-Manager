@@ -26,6 +26,7 @@ export interface ProxyConfig {
     global_system_prompt?: GlobalSystemPromptConfig;
     image_thinking_mode?: 'enabled' | 'disabled'; // [NEW] 图像思维模式开关
     only_raw_quota_models?: boolean; // [NEW] 是否只暴露真实配额模型
+    model_catalog?: Array<{ id: string; enabled: boolean }>; // [NEW] 模型目录（顺序即展示顺序，enabled=false 的模型不出现在 /v1/models）
     proxy_pool?: ProxyPoolConfig;
 }
 

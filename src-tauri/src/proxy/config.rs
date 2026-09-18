@@ -844,6 +844,53 @@ fn default_image_per_account_concurrency() -> usize {
     4
 }
 
+/// 模型目录条目：控制该模型是否在 /v1/models 等列表接口中暴露
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ModelCatalogEntry {
+    /// 模型 ID（原样返回给客户端）
+    pub id: String,
+    /// 是否对外暴露（false = 不出现在列表接口的返回中）
+    #[serde(default = "default_model_enabled")]
+    pub enabled: bool,
+}
+
+fn default_model_enabled() -> bool {
+    true
+}
+
+/// 默认模型目录（17 项）：全新配置、或用户把目录清空时使用。
+/// 只影响 /v1/models、/v1/models/claude、/v1beta/models 的返回内容，不影响请求路由。
+pub const DEFAULT_MODEL_CATALOG_IDS: [&str; 17] = [
+    "gemini-3.1-flash-image",
+    "gemini-3.1-flash-lite",
+    "gemini-3.1-pro",
+    "gemini-3.5-flash",
+    "gemini-3.5-flash-lite",
+    "gemini-3.7-flash",
+    "gemini-3.8-flash-high",
+    "gemini-3.8-flash-low",
+    "gemini-3.8-flash-medium",
+    "gemini-2.5-flash",
+    "gemini-2.5-flash-thinking",
+    "gemini-2.5-flash-lite",
+    "gemini-2.5-pro",
+    "claude-opus-4-6",
+    "claude-sonnet-4-6",
+    "gemini-3.8-flash-tiered",
+    "gpt-oss-120b-medium",
+];
+
+/// 构造默认模型目录（全部 enabled）
+pub fn default_model_catalog() -> Vec<ModelCatalogEntry> {
+    DEFAULT_MODEL_CATALOG_IDS
+        .iter()
+        .map(|id| ModelCatalogEntry {
+            id: (*id).to_string(),
+            enabled: true,
+        })
+        .collect()
+}
+
 /// 反代服务配置
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProxyConfig {
@@ -956,6 +1003,11 @@ pub struct ProxyConfig {
     /// 代理池配置
     #[serde(default)]
     pub proxy_pool: ProxyPoolConfig,
+
+    /// 模型目录：列表接口（/v1/models、/v1/models/claude、/v1beta/models）只返回
+    /// 此处 enabled=true 的项，数组顺序即返回顺序。为空时回退到内置默认目录。
+    #[serde(default = "default_model_catalog")]
+    pub model_catalog: Vec<ModelCatalogEntry>,
 }
 
 /// Request log retention policy.
@@ -1053,6 +1105,7 @@ impl Default for ProxyConfig {
             proxy_pool: ProxyPoolConfig::default(),
             image_thinking_mode: None,
             image_scheduler: ImageSchedulerConfig::default(),
+            model_catalog: default_model_catalog(),
         }
     }
 }

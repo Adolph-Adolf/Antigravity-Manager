@@ -1155,7 +1155,9 @@
       "model_name": "모델 이름",
       "model_id": "모델 ID",
       "description": "설명",
-      "action": "작업"
+      "action": "작업",
+      "enable_toggle_label": "사용",
+      "disabled_hint": "비활성화됨: /v1/models 목록에 표시되지 않습니다"
     },
     "cli_sync": {
       "title": "원클릭 CLI 동기화",

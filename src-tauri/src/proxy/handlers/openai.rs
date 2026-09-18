@@ -4846,11 +4846,11 @@ pub async fn handle_completions(
 }
 
 pub async fn handle_list_models(State(state): State<AppState>) -> impl IntoResponse {
-    use crate::proxy::common::model_mapping::get_all_dynamic_models;
+    use crate::proxy::common::model_mapping::get_catalog_models;
 
-    let only_raw = *state.only_raw_quota_models.read().await;
-    let model_ids =
-        get_all_dynamic_models(&state.custom_mapping, Some(&state.token_manager), only_raw).await;
+    // 只返回「模型目录」中 enabled=true 的项
+    // （可在 API 反代页面的“支持模型与集成”表中逐项开关）
+    let model_ids = get_catalog_models(&state.model_catalog).await;
 
     let data: Vec<_> = model_ids
         .into_iter()

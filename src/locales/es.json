@@ -1155,7 +1155,9 @@
       "model_name": "Nombre del Modelo",
       "model_id": "ID del Modelo",
       "description": "Descripción",
-      "action": "Acción"
+      "action": "Acción",
+      "enable_toggle_label": "Habilitar",
+      "disabled_hint": "Deshabilitado: no aparecerá en la lista /v1/models"
     },
     "cli_sync": {
       "title": "Sincronización CLI con Un Clic",

@@ -22,7 +22,8 @@ import {
     Check,
     X,
     Edit2,
-    Save
+    Save,
+    Bot
 } from 'lucide-react';
 import { AppConfig, ProxyConfig, StickySessionConfig, ExperimentalConfig } from '../types/config';
 import HelpTooltip from '../components/common/HelpTooltip';
@@ -1064,17 +1065,38 @@ response = client.chat.completions.create(
 print(response.choices[0].message.content)`;
     };
 
-    // 在 filter 逻辑中，当选择 openai 协议时，允许显示所有模型
-    const filteredModels = models.filter(model => {
-        if (selectedProtocol === 'openai') {
-            return true;
+    // 「支持模型与集成」表格的数据源：模型目录
+    // 目录来源（写回配置时也用这一份）：持久化配置优先；缺失/为空时用 useProxyModels 给出的**完整**列表。
+    // 注意：这里刻意不用 filteredModels —— 那是按协议 tab 过滤后的结果。
+    // 若用它当来源，在 Anthropic 页签下按开关会把 image 模型从目录里删掉并持久化。
+    const catalogSource: Array<{ id: string; enabled: boolean }> = (() => {
+        const persistedCatalog = appConfig?.proxy?.model_catalog;
+        if (persistedCatalog && persistedCatalog.length > 0) {
+            return persistedCatalog.map(item => ({ id: item.id, enabled: item.enabled !== false }));
         }
-        // Anthropic 协议下隐藏不支持的图片模型
-        if (selectedProtocol === 'anthropic') {
-            return !model.id.includes('image');
-        }
-        return true;
-    });
+        return models.map(model => ({ id: model.id, enabled: true }));
+    })();
+
+    // 展示用：套用协议 tab 过滤（规则与原 filteredModels 保持一致）
+    const supportedModelCatalog =
+        selectedProtocol === 'anthropic'
+            ? catalogSource.filter(item => !item.id.includes('image'))
+            : catalogSource;
+
+    // id -> { name, icon } 展示字典（名称/图标仍取自 useProxyModels）
+    const modelDisplayMap = new Map<string, { name: string; icon: React.ReactNode }>(
+        models.map(model => [model.id, { name: model.name, icon: model.icon }])
+    );
+
+    // 切换单个模型的启用状态：用当前完整目录构造新数组后写回配置
+    const handleToggleModelEnabled = (id: string, enabled: boolean) => {
+        // 从 catalogSource（完整目录，非 tab 过滤后的展示列表）构造，避免丢掉未显示的行
+        const nextCatalog = catalogSource.map(item =>
+            item.id === id ? { ...item, enabled } : item
+        );
+        // updateProxyConfig 内部走 saveConfig -> invoke('save_config')，即本页现有的自动保存机制
+        updateProxyConfig({ model_catalog: nextCatalog });
+    };
 
     return (
         <div className="h-full w-full overflow-y-auto overflow-x-hidden">
@@ -2747,33 +2769,53 @@ print(response.choices[0].message.content)`;
                                                     <th className="text-[11px] font-medium">{t('proxy.supported_models.model_name')}</th>
                                                     <th className="text-[11px] font-medium">{t('proxy.supported_models.model_id')}</th>
                                                     <th className="text-[11px] hidden sm:table-cell font-medium">{t('proxy.supported_models.description')}</th>
-                                                    <th className="text-[11px] w-20 text-center font-medium">{t('proxy.supported_models.action')}</th>
+                                                    <th className="text-[11px] w-28 text-center font-medium">{t('proxy.supported_models.action')}</th>
                                                 </tr>
                                             </thead>
                                             <tbody>
-                                                {filteredModels.map((m) => (
-                                                    <tr
-                                                        key={m.id}
-                                                        className={`hover:bg-blue-50/50 dark:hover:bg-blue-900/10 cursor-pointer transition-colors ${selectedModelId === m.id ? 'bg-blue-50/80 dark:bg-blue-900/20' : ''}`}
-                                                        onClick={() => setSelectedModelId(m.id)}
-                                                    >
-                                                        <td className="pl-4 text-blue-500">{m.icon}</td>
-                                                        <td className="font-bold text-xs">{m.name}</td>
-                                                        <td className="font-mono text-[10px] text-gray-500">{m.id}</td>
-                                                        <td className="text-[10px] text-gray-400 hidden sm:table-cell">{m.desc}</td>
-                                                        <td className="text-center">
-                                                            <button
-                                                                className="btn btn-ghost btn-xs text-blue-500"
-                                                                onClick={(e) => {
-                                                                    e.stopPropagation();
-                                                                    copyToClipboardHandler(m.id, `model-${m.id}`);
-                                                                }}
-                                                            >
-                                                                {copied === `model-${m.id}` ? <CheckCircle size={14} /> : <div className="flex items-center gap-1 text-[10px] font-bold tracking-tight"><Copy size={12} /> {t('common.copy')}</div>}
-                                                            </button>
-                                                        </td>
-                                                    </tr>
-                                                ))}
+                                                {supportedModelCatalog.map((entry) => {
+                                                    const display = modelDisplayMap.get(entry.id);
+                                                    const displayName = display?.name ?? entry.id;
+                                                    const displayIcon = display?.icon ?? <Bot size={16} className="text-blue-400" />;
+                                                    const isEnabled = entry.enabled;
+                                                    return (
+                                                        <tr
+                                                            key={entry.id}
+                                                            className={`hover:bg-blue-50/50 dark:hover:bg-blue-900/10 cursor-pointer transition-colors ${selectedModelId === entry.id ? 'bg-blue-50/80 dark:bg-blue-900/20' : ''} ${!isEnabled ? 'opacity-50' : ''}`}
+                                                            onClick={() => setSelectedModelId(entry.id)}
+                                                        >
+                                                            <td className="pl-4 text-blue-500">{displayIcon}</td>
+                                                            <td className={`font-bold text-xs ${!isEnabled ? 'line-through text-gray-400' : ''}`}>{displayName}</td>
+                                                            <td className={`font-mono text-[10px] text-gray-500 ${!isEnabled ? 'line-through' : ''}`}>{entry.id}</td>
+                                                            <td className={`text-[10px] text-gray-400 hidden sm:table-cell ${!isEnabled ? 'line-through' : ''}`}>{displayName}</td>
+                                                            <td className="text-center">
+                                                                <div className="flex items-center justify-center gap-1" onClick={(e) => e.stopPropagation()}>
+                                                                    <button
+                                                                        className="btn btn-ghost btn-xs text-blue-500"
+                                                                        onClick={(e) => {
+                                                                            e.stopPropagation();
+                                                                            copyToClipboardHandler(entry.id, `model-${entry.id}`);
+                                                                        }}
+                                                                    >
+                                                                        {copied === `model-${entry.id}` ? <CheckCircle size={14} /> : <div className="flex items-center gap-1 text-[10px] font-bold tracking-tight"><Copy size={12} /> {t('common.copy')}</div>}
+                                                                    </button>
+                                                                    <input
+                                                                        type="checkbox"
+                                                                        className="toggle toggle-sm bg-gray-200 dark:bg-base-300 border-gray-300 dark:border-base-300 checked:bg-blue-600 checked:border-blue-600"
+                                                                        checked={isEnabled}
+                                                                        aria-label={t('proxy.supported_models.enable_toggle_label')}
+                                                                        title={isEnabled ? t('proxy.supported_models.enable_toggle_label') : t('proxy.supported_models.disabled_hint')}
+                                                                        onClick={(e) => e.stopPropagation()}
+                                                                        onChange={(e) => {
+                                                                            e.stopPropagation();
+                                                                            handleToggleModelEnabled(entry.id, e.target.checked);
+                                                                        }}
+                                                                    />
+                                                                </div>
+                                                            </td>
+                                                        </tr>
+                                                    );
+                                                })}
                                             </tbody>
                                         </table>
                                     </div>

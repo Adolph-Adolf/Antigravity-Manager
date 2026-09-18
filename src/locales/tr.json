@@ -963,7 +963,9 @@
       "model_name": "Model Adı",
       "model_id": "Model Kimliği",
       "description": "Açıklama",
-      "action": "İşlem"
+      "action": "İşlem",
+      "enable_toggle_label": "Etkinleştir",
+      "disabled_hint": "Devre dışı: /v1/models listesinde görünmez"
     }
   },
   "monitor": {

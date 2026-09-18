@@ -1006,12 +1006,10 @@ pub async fn handle_generate(
 pub async fn handle_list_models(
     State(state): State<AppState>,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
-    use crate::proxy::common::model_mapping::get_all_dynamic_models;
+    use crate::proxy::common::model_mapping::get_catalog_models;
 
-    // 获取所有动态模型列表（与 /v1/models 一致）
-    let only_raw = *state.only_raw_quota_models.read().await;
-    let model_ids =
-        get_all_dynamic_models(&state.custom_mapping, Some(&state.token_manager), only_raw).await;
+    // 与 /v1/models 一致：只返回「模型目录」中 enabled=true 的项
+    let model_ids = get_catalog_models(&state.model_catalog).await;
 
     // 转换为 Gemini API 格式
     let models: Vec<_> = model_ids

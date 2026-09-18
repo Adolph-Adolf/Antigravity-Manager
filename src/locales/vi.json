@@ -994,7 +994,9 @@
       "model_name": "Tên Model",
       "model_id": "ID Model",
       "description": "Mô tả",
-      "action": "Thao tác"
+      "action": "Thao tác",
+      "enable_toggle_label": "Bật",
+      "disabled_hint": "Đã tắt: sẽ không xuất hiện trong danh sách /v1/models"
     }
   },
   "monitor": {

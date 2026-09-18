@@ -1155,7 +1155,9 @@
       "model_name": "モデル名",
       "model_id": "モデルID",
       "description": "説明",
-      "action": "操作"
+      "action": "操作",
+      "enable_toggle_label": "有効化",
+      "disabled_hint": "無効: /v1/models の一覧に表示されません"
     },
     "cli_sync": {
       "title": "CLI 設定の一括同期",

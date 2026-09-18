@@ -450,6 +450,11 @@ pub async fn save_config(
             .axum_server
             .update_only_raw_quota_models(config.proxy.only_raw_quota_models)
             .await;
+        // 更新模型目录（列表接口暴露范围）
+        instance
+            .axum_server
+            .update_model_catalog(&config.proxy)
+            .await;
         // 更新上游代理
         instance
             .axum_server

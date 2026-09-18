@@ -962,7 +962,9 @@
       "model_name": "اسم النموذج",
       "model_id": "معرف النموذج",
       "description": "الوصف",
-      "action": "إجراء"
+      "action": "إجراء",
+      "enable_toggle_label": "تمكين",
+      "disabled_hint": "معطّل: لن يظهر في قائمة /v1/models"
     },
     "cli_sync": {
       "title": "مزامنة CLI بنقرة واحدة",

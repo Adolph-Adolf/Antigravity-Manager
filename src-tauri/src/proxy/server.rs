@@ -110,6 +110,7 @@ pub struct AppState {
     pub proxy_pool_state: Arc<tokio::sync::RwLock<crate::proxy::config::ProxyPoolConfig>>, // [FIX Web Mode]
     pub proxy_pool_manager: Arc<crate::proxy::proxy_pool::ProxyPoolManager>, // [FIX Web Mode]
     pub only_raw_quota_models: Arc<tokio::sync::RwLock<bool>>, // [NEW] 是否只暴露真实配额模型
+    pub model_catalog: Arc<tokio::sync::RwLock<Vec<crate::proxy::config::ModelCatalogEntry>>>, // [NEW] 模型目录（列表接口的暴露范围）
     pub image_scheduler: Arc<ImageScheduler>,
 }
 
@@ -422,6 +423,7 @@ pub struct AxumServer {
     pub proxy_pool_state: Arc<tokio::sync::RwLock<crate::proxy::config::ProxyPoolConfig>>, // [NEW] 代理池配置状态
     pub proxy_pool_manager: Arc<crate::proxy::proxy_pool::ProxyPoolManager>, // [NEW] 暴露代理池管理器供命令调用
     pub only_raw_quota_models: Arc<tokio::sync::RwLock<bool>>,
+    pub model_catalog: Arc<tokio::sync::RwLock<Vec<crate::proxy::config::ModelCatalogEntry>>>,
 }
 
 impl AxumServer {
@@ -429,6 +431,13 @@ impl AxumServer {
         let mut r = self.only_raw_quota_models.write().await;
         *r = only_raw;
         tracing::debug!("only_raw_quota_models 已更新: {}", only_raw);
+    }
+
+    /// 热更新模型目录（列表接口暴露范围）
+    pub async fn update_model_catalog(&self, config: &crate::proxy::config::ProxyConfig) {
+        let mut c = self.model_catalog.write().await;
+        *c = config.model_catalog.clone();
+        tracing::debug!("模型目录已全量热更新: {} 项", c.len());
     }
 
     pub async fn update_mapping(&self, config: &crate::proxy::config::ProxyConfig) {
@@ -521,6 +530,7 @@ impl AxumServer {
         cloudflared_state: Arc<crate::commands::cloudflared::CloudflaredState>,
         proxy_pool_config: crate::proxy::config::ProxyPoolConfig, // [NEW]
         only_raw_quota_models: bool,
+        model_catalog: Vec<crate::proxy::config::ModelCatalogEntry>, // [NEW] 模型目录
         image_scheduler_config: crate::proxy::config::ImageSchedulerConfig,
     ) -> Result<(Self, tokio::task::JoinHandle<()>), String> {
         let custom_mapping_state = Arc::new(tokio::sync::RwLock::new(custom_mapping));
@@ -540,6 +550,7 @@ impl AxumServer {
         let is_running_state = Arc::new(RwLock::new(false));
 
         let only_raw_quota_models_state = Arc::new(tokio::sync::RwLock::new(only_raw_quota_models));
+        let model_catalog_state = Arc::new(tokio::sync::RwLock::new(model_catalog));
         let image_account_ids = token_manager.enabled_account_ids();
         let image_account_count = image_account_ids.len();
         let image_scheduler = build_image_scheduler(
@@ -591,6 +602,7 @@ impl AxumServer {
             proxy_pool_state: proxy_pool_state.clone(),
             proxy_pool_manager: proxy_pool_manager.clone(),
             only_raw_quota_models: only_raw_quota_models_state.clone(),
+            model_catalog: model_catalog_state.clone(),
             image_scheduler,
         };
 
@@ -1018,6 +1030,7 @@ impl AxumServer {
             proxy_pool_state,
             proxy_pool_manager,
             only_raw_quota_models: only_raw_quota_models_state,
+            model_catalog: model_catalog_state,
         };
 
         let server_cancel_token = cancel_token.clone();
@@ -1718,6 +1731,13 @@ async fn admin_save_config(
     {
         let mut pool = state.proxy_pool_state.write().await;
         *pool = new_config.clone().proxy.proxy_pool;
+    }
+
+    // 更新模型目录（Web/Docker 保存配置时热更新列表接口的暴露范围）
+    // 注意：必须与 commands/mod.rs 里 Tauri 路径的热更新保持一致，否则 Web 模式下开关不生效
+    {
+        let mut catalog = state.model_catalog.write().await;
+        *catalog = new_config.clone().proxy.model_catalog;
     }
 
     // [FIX Web Mode] 同步全局内存配置（热更新思考预算、系统提示词、图像思考模式、压缩等级、阈值与审计策略）

@@ -208,6 +208,30 @@ pub async fn get_all_dynamic_models(
     sorted_ids
 }
 
+/// 按「模型目录」计算列表接口应返回的模型 ID（/v1/models 系列的唯一出口）。
+/// - 目录非空：只返回 enabled=true 的项，且**保持目录里的顺序**
+/// - 目录为空：回退到内置默认目录（`proxy::config::default_model_catalog`）
+///
+/// 注意：这里只影响“列表接口返回什么”，不参与请求路由，
+/// 因此被禁用的模型仍可被客户端直接请求（路由由 resolve_model_route 决定）。
+pub async fn get_catalog_models(
+    catalog: &tokio::sync::RwLock<Vec<crate::proxy::config::ModelCatalogEntry>>,
+) -> Vec<String> {
+    let entries = catalog.read().await;
+    if entries.is_empty() {
+        return crate::proxy::config::default_model_catalog()
+            .into_iter()
+            .filter(|e| e.enabled)
+            .map(|e| e.id)
+            .collect();
+    }
+    entries
+        .iter()
+        .filter(|e| e.enabled)
+        .map(|e| e.id.clone())
+        .collect()
+}
+
 /// Wildcard matching - supports multiple wildcards
 ///
 /// **Note**: Matching is **case-sensitive**. Pattern `GPT-4*` will NOT match `gpt-4-turbo`.

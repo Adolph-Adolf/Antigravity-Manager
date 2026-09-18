@@ -1031,7 +1031,9 @@
       "model_name": "模型名稱",
       "model_id": "模型 ID",
       "description": "描述",
-      "action": "操作"
+      "action": "操作",
+      "enable_toggle_label": "啟用",
+      "disabled_hint": "已停用：不會出現在 /v1/models 列表中"
     }
   },
   "monitor": {

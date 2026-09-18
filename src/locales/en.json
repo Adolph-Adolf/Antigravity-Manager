@@ -1186,7 +1186,9 @@
       "model_name": "Model Name",
       "model_id": "Model ID",
       "description": "Description",
-      "action": "Action"
+      "action": "Action",
+      "enable_toggle_label": "Enable",
+      "disabled_hint": "Disabled: will not appear in the /v1/models list"
     },
     "cli_sync": {
       "title": "One-click CLI Sync",

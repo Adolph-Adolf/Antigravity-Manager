@@ -1155,7 +1155,9 @@
       "model_name": "Название модели",
       "model_id": "ID модели",
       "description": "Описание",
-      "action": "Действие"
+      "action": "Действие",
+      "enable_toggle_label": "Включить",
+      "disabled_hint": "Отключено: не будет отображаться в списке /v1/models"
     },
     "cli_sync": {
       "title": "Синхронизация CLI",

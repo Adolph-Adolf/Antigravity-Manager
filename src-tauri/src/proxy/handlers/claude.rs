@@ -2045,11 +2045,10 @@ pub async fn handle_messages(
 
 /// 列出可用模型
 pub async fn handle_list_models(State(state): State<AppState>) -> impl IntoResponse {
-    use crate::proxy::common::model_mapping::get_all_dynamic_models;
+    use crate::proxy::common::model_mapping::get_catalog_models;
 
-    let only_raw = *state.only_raw_quota_models.read().await;
-    let model_ids =
-        get_all_dynamic_models(&state.custom_mapping, Some(&state.token_manager), only_raw).await;
+    // 只返回「模型目录」中 enabled=true 的项（与 /v1/models 同源）
+    let model_ids = get_catalog_models(&state.model_catalog).await;
 
     let data: Vec<_> = model_ids
         .into_iter()
