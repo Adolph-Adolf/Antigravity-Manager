@@ -1,5 +1,5 @@
 # Antigravity Tools 🚀
-> 专业级 AI 账号管理与协议代理系统 (v4.7.5)
+> 专业级 AI 账号管理与协议代理系统 (v4.7.6)
 > 本仓库为 [lbjlaq/Antigravity-Manager](https://github.com/lbjlaq/Antigravity-Manager) 的自用分支（依据 CC BY-NC-SA 4.0 保留原始署名）
 
 ---
@@ -53,7 +53,7 @@
       <img src="https://img.shields.io/github/v/release/Adolph-Adolf/Antigravity-Manager?color=blue&style=flat-square" alt="GitHub release">
     </a>
     <a href="https://github.com/Adolph-Adolf/Antigravity-Manager">
-      <img src="https://img.shields.io/badge/Version-4.7.5-blue?style=flat-square" alt="Version">
+      <img src="https://img.shields.io/badge/Version-4.7.6-blue?style=flat-square" alt="Version">
     </a>
     <img src="https://img.shields.io/badge/Frontend-React-61DAFB?style=flat-square" alt="React">
     <img src="https://img.shields.io/badge/License-CC--BY--NC--SA--4.0-lightgrey?style=flat-square" alt="License">

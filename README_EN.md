@@ -1,5 +1,5 @@
 # Antigravity Tools 🚀
-> Professional AI Account Management & Protocol Proxy System (v4.7.5)
+> Professional AI Account Management & Protocol Proxy System (v4.7.6)
 > This repository is a personal fork of [lbjlaq/Antigravity-Manager](https://github.com/lbjlaq/Antigravity-Manager) (original attribution retained per CC BY-NC-SA 4.0).
 
 ---
@@ -53,7 +53,7 @@ The in-app update check targets this repository (no more upstream release prompt
       <img src="https://img.shields.io/github/v/release/Adolph-Adolf/Antigravity-Manager?color=blue&style=flat-square" alt="GitHub release">
     </a>
     <a href="https://github.com/Adolph-Adolf/Antigravity-Manager">
-      <img src="https://img.shields.io/badge/Version-4.7.5-blue?style=flat-square" alt="Version">
+      <img src="https://img.shields.io/badge/Version-4.7.6-blue?style=flat-square" alt="Version">
     </a>
     <img src="https://img.shields.io/badge/Tauri-v2-orange?style=flat-square" alt="Tauri">
     <img src="https://img.shields.io/badge/Backend-Rust-red?style=flat-square" alt="Rust">
