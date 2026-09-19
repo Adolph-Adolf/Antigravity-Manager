@@ -166,7 +166,7 @@ jobs:
             -name "*.msi" -o \
             -name "*.exe" -o \
             -name "*.sig" \
-          ) -print0 | while IFS= read -r -d '' file; do
+          \) -print0 | while IFS= read -r -d '' file; do
             cp "$file" release-files/
           done
           find release-files -maxdepth 1 -type f -print
