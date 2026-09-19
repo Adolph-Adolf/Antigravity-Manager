@@ -144,11 +144,19 @@ pub fn map_claude_model_to_gemini(input: &str) -> String {
 }
 
 /// 获取所有内置支持的模型列表关键字
+///
+/// [保留] 自 v4.7.5 自用版起，列表接口（/v1/models 等）统一改走 `get_catalog_models`
+/// （「模型目录」），本函数与其下方的 `get_all_dynamic_models` 不再被调用。
+/// 保留以便随时回滚到"别名全集"行为。
+#[allow(dead_code)]
 pub fn get_supported_models() -> Vec<String> {
     CLAUDE_TO_GEMINI.keys().map(|s| s.to_string()).collect()
 }
 
 /// 动态获取所有可用模型列表 (包含内置与用户自定义与官方端点动态下发)
+///
+/// [保留] 见 `get_supported_models` 的说明；当前列表接口不再调用本函数。
+#[allow(dead_code)]
 pub async fn get_all_dynamic_models(
     custom_mapping: &tokio::sync::RwLock<std::collections::HashMap<String, String>>,
     token_manager: Option<&crate::proxy::token_manager::TokenManager>,
