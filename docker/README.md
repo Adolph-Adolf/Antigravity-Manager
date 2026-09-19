@@ -54,7 +54,7 @@ docker run -d \
   -e WEB_PASSWORD=your-login-password \
   -e ABV_MAX_BODY_SIZE=104857600 \
   -v ~/.antigravity_tools:/root/.antigravity_tools \
-  lbjlaq/antigravity-manager:latest
+  ghcr.io/adolph-adolf/antigravity-manager:latest
 ```
 
 #### 🔐 鑒權邏輯 (Security Scenarios)
@@ -142,8 +142,8 @@ docker build --build-arg USE_MIRROR=true -t antigravity-manager:latest -f docker
 若要推送至你的倉庫：
 ```bash
 # 打上版本標籤並推送
-docker tag antigravity-manager:latest lbjlaq/antigravity-manager:latest
-docker tag antigravity-manager:latest lbjlaq/antigravity-manager:4.3.0
-docker push lbjlaq/antigravity-manager:latest
-docker push lbjlaq/antigravity-manager:4.3.0
+docker tag antigravity-manager:latest ghcr.io/adolph-adolf/antigravity-manager:latest
+docker tag antigravity-manager:latest ghcr.io/adolph-adolf/antigravity-manager:4.3.0
+docker push ghcr.io/adolph-adolf/antigravity-manager:latest
+docker push ghcr.io/adolph-adolf/antigravity-manager:4.3.0
 ```

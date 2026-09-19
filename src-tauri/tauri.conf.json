@@ -2,7 +2,7 @@
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "Antigravity Tools",
   "version": "4.7.5",
-  "identifier": "com.lbjlaq.antigravity-tools",
+  "identifier": "com.adolphjau.antigravity-tools",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
@@ -57,7 +57,7 @@
         "https://github.com/Adolph-Adolf/Antigravity-Manager/releases/latest/download/updater.json"
       ],
       "dialog": true,
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEJFRjVDRjdCREE1Rjg2NkYKUldSdmhsL2FlOC8xdnJuTzBtaTRhZkk1VWJ1cW5QWGU3ZWEwU20yZHRlZStxMnRWcUIzc3FwT2IK"
+      "pubkey": "ZFc1MGNuVnpkR1ZrSUdOdmJXMWxiblE2SUcxcGJtbHphV2R1SUhCMVlteHBZeUJyWlhrNklEQkdNa1l4TWpWRlFqTkVRVGd3UVRFS1VsZFRhR2RPY1hwWWFFbDJSRFpOWmpGRVR6aFVTMnBzVGxaSU1FOTNSRVppVmxaeGREWnFjVXhNVm00clNuQkpOMkV6VEZCNE1sQUs="
     },
     "process": null,
     "fs": null,

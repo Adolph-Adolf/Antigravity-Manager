@@ -4,12 +4,12 @@ cask "antigravity-tools" do
 
   name "Antigravity Tools"
   desc "Professional Account Management for AI Services"
-  homepage "https://github.com/lbjlaq/Antigravity-Manager"
+  homepage "https://github.com/Adolph-Adolf/Antigravity-Manager"
 
   on_macos do
     arch intel: "x64", arm: "aarch64"
 
-    url "https://github.com/lbjlaq/Antigravity-Manager/releases/download/v#{version}/Antigravity.Tools_#{version}_#{arch}.dmg"
+    url "https://github.com/Adolph-Adolf/Antigravity-Manager/releases/download/v#{version}/Antigravity.Tools_#{version}_#{arch}.dmg"
 
     app "Antigravity Tools.app"
 
@@ -20,17 +20,17 @@ cask "antigravity-tools" do
     end
 
     zap trash: [
-      "~/Library/Application Support/com.lbjlaq.antigravity-tools",
-      "~/Library/Caches/com.lbjlaq.antigravity-tools",
-      "~/Library/Preferences/com.lbjlaq.antigravity-tools.plist",
-      "~/Library/Saved Application State/com.lbjlaq.antigravity-tools.savedState",
+      "~/Library/Application Support/com.adolphjau.antigravity-tools",
+      "~/Library/Caches/com.adolphjau.antigravity-tools",
+      "~/Library/Preferences/com.adolphjau.antigravity-tools.plist",
+      "~/Library/Saved Application State/com.adolphjau.antigravity-tools.savedState",
     ]
   end
 
   on_linux do
     arch arm: "aarch64", intel: "amd64"
 
-    url "https://github.com/lbjlaq/Antigravity-Manager/releases/download/v#{version}/Antigravity.Tools_#{version}_#{arch}.AppImage"
+    url "https://github.com/Adolph-Adolf/Antigravity-Manager/releases/download/v#{version}/Antigravity.Tools_#{version}_#{arch}.AppImage"
     binary "Antigravity.Tools_#{version}_#{arch}.AppImage", target: "antigravity-tools"
 
     preflight_steps do

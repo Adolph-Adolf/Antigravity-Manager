@@ -1,5 +1,6 @@
 # Antigravity Tools 🚀
 > Professional AI Account Management & Protocol Proxy System (v4.7.5)
+> This repository is a personal fork of [lbjlaq/Antigravity-Manager](https://github.com/lbjlaq/Antigravity-Manager) (original attribution retained per CC BY-NC-SA 4.0).
 
 <div align="center">
   <img src="public/icon.png" width="100" height="100" alt="Antigravity Tools Logo">
@@ -7,10 +8,10 @@
   <p>Multi-platform Automated Operations & Multi-Account Orchestration Console</p>
 
   <p>
-    <a href="https://github.com/lbjlaq/Antigravity-Manager/releases">
-      <img src="https://img.shields.io/github/v/release/lbjlaq/Antigravity-Manager?color=blue&style=flat-square" alt="GitHub release">
+    <a href="https://github.com/Adolph-Adolf/Antigravity-Manager/releases">
+      <img src="https://img.shields.io/github/v/release/Adolph-Adolf/Antigravity-Manager?color=blue&style=flat-square" alt="GitHub release">
     </a>
-    <a href="https://github.com/lbjlaq/Antigravity-Manager">
+    <a href="https://github.com/Adolph-Adolf/Antigravity-Manager">
       <img src="https://img.shields.io/badge/Version-4.7.5-blue?style=flat-square" alt="Version">
     </a>
     <img src="https://img.shields.io/badge/Tauri-v2-orange?style=flat-square" alt="Tauri">
@@ -61,12 +62,6 @@ If you find this project helpful, feel free to buy me a coffee!
 | Alipay | WeChat Pay | Buy Me a Coffee |
 | :---: | :---: | :---: |
 | ![Alipay](./docs/images/donate_alipay.png) | ![WeChat](./docs/images/donate_wechat.png) | ![Coffee](./docs/images/donate_coffee.png) |
-
-## 🚀 Recommended Projects
-
-If you like this project, you might also be interested in:
-
-*   **[Antigravity-Tools-LS](https://github.com/lbjlaq/Antigravity-Tools-LS)**: A Language Server Protocol (LSP) designed for AI protocols, providing you with smarter code completion, diagnostics, and protocol debugging experiences.
 
 ## 🌟 Detailed Feature Matrix
 
@@ -136,24 +131,24 @@ Automatically detects your OS, architecture, and package manager — one command
 
 **Linux / macOS:**
 ```bash
-curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Adolph-Adolf/Antigravity-Manager/main/install.sh | bash
 ```
 
 **Windows (PowerShell):**
 ```powershell
-irm https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/Adolph-Adolf/Antigravity-Manager/main/install.ps1 | iex
 ```
 
 > **Supported formats**: Linux (`.deb` / `.rpm` / `.AppImage`) | macOS (`.dmg`) | Windows (NSIS `.exe`)
 >
-> **Advanced usage**: Install a specific version `curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.sh | bash -s -- --version 4.6.8`, dry-run mode `curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.sh | bash -s -- --dry-run`
+> **Advanced usage**: Install a specific version `curl -fsSL https://raw.githubusercontent.com/Adolph-Adolf/Antigravity-Manager/main/install.sh | bash -s -- --version 4.6.8`, dry-run mode `curl -fsSL https://raw.githubusercontent.com/Adolph-Adolf/Antigravity-Manager/main/install.sh | bash -s -- --dry-run`
 
 #### macOS - Homebrew
 If you have [Homebrew](https://brew.sh/) installed, you can also install via:
 
 ```bash
 # 1. Tap the repository
-brew tap lbjlaq/antigravity-manager https://github.com/lbjlaq/Antigravity-Manager
+brew tap ghcr.io/adolph-adolf/antigravity-manager https://github.com/Adolph-Adolf/Antigravity-Manager
 
 # 2. Install the app
 brew install --cask antigravity-tools
@@ -164,12 +159,12 @@ You can choose to install via the one-click script or Homebrew:
 
 **Option 1: One-click script (Recommended)**
 ```bash
-curl -sSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/deploy/arch/install.sh | bash
+curl -sSL https://raw.githubusercontent.com/Adolph-Adolf/Antigravity-Manager/main/deploy/arch/install.sh | bash
 ```
 
 **Option 2: via Homebrew** (If you have [Linuxbrew](https://sh.brew.sh/) installed)
 ```bash
-brew tap lbjlaq/antigravity-manager https://github.com/lbjlaq/Antigravity-Manager
+brew tap ghcr.io/adolph-adolf/antigravity-manager https://github.com/Adolph-Adolf/Antigravity-Manager
 brew install --cask antigravity-tools
 ```
 
@@ -177,7 +172,7 @@ brew install --cask antigravity-tools
 The AppImage will be automatically symlinked to your binary path with executable permissions.
 
 ### Option B: Manual Download
-Download from [GitHub Releases](https://github.com/lbjlaq/Antigravity-Manager/releases):
+Download from [GitHub Releases](https://github.com/Adolph-Adolf/Antigravity-Manager/releases):
 *   **macOS**: `.dmg` (Universal, Apple Silicon & Intel)
 *   **Windows**: `.msi` or portable `.zip`
 *   **Linux**: `.deb` or `AppImage`
@@ -195,7 +190,7 @@ docker run -d --name antigravity-manager \
   -e WEB_PASSWORD=your-login-password \
   -e ABV_MAX_BODY_SIZE=104857600 \
   -v ~/.antigravity_tools:/root/.antigravity_tools \
-  lbjlaq/antigravity-manager:latest
+  ghcr.io/adolph-adolf/antigravity-manager:latest
 
 # Forgot keys? Run `docker logs antigravity-manager` or `grep -E '"api_key"|"admin_password"' ~/.antigravity_tools/gui_config.json`
 
@@ -455,7 +450,7 @@ In clients that support OpenAI protocol (e.g., Cherry Studio), you can configure
 <details>
 <summary><b>👥 Contributors - Click to expand</b></summary>
 
-<a href="https://github.com/lbjlaq"><img src="https://github.com/lbjlaq.png" width="50px" style="border-radius: 50%;" alt="lbjlaq"/></a>
+<a href="https://github.com/Adolph-Adolf"><img src="https://github.com/Adolph-Adolf.png" width="50px" style="border-radius: 50%;" alt="Adolph-Adolf"/></a>
 <a href="https://github.com/XinXin622"><img src="https://github.com/XinXin622.png" width="50px" style="border-radius: 50%;" alt="XinXin622"/></a>
 <a href="https://github.com/llsenyue"><img src="https://github.com/llsenyue.png" width="50px" style="border-radius: 50%;" alt="llsenyue"/></a>
 <a href="https://github.com/salacoste"><img src="https://github.com/salacoste.png" width="50px" style="border-radius: 50%;" alt="salacoste"/></a>
@@ -511,5 +506,5 @@ This project has referenced or learned from the ideas or code of the following e
 
 <div align="center">
   <p>If you find this tool helpful, please give it a ⭐️ on GitHub!</p>
-  <p>Copyright © 2024-2026 Antigravity Team.</p>
+  <p>Copyright © 2026 [Adolph-Adolf](https://github.com/Adolph-Adolf) · Based on lbjlaq/Antigravity-Manager</p>
 </div>

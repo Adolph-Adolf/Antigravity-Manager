@@ -1505,7 +1505,7 @@ function Settings() {
 
                                     {/* GitHub Card */}
                                     <a
-                                        href="https://github.com/lbjlaq/Antigravity-Manager"
+                                        href="https://github.com/Adolph-Adolf/Antigravity-Manager"
                                         target="_blank"
                                         rel="noreferrer"
                                         className="bg-white dark:bg-base-100 p-4 rounded-2xl border border-gray-100 dark:border-base-300 shadow-sm hover:shadow-md hover:border-gray-300 dark:hover:border-gray-600 transition-all group flex flex-col items-center text-center gap-3 cursor-pointer"

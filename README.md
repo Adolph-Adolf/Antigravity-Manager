@@ -1,5 +1,6 @@
 # Antigravity Tools 🚀
 > 专业级 AI 账号管理与协议代理系统 (v4.7.5)
+> 本仓库为 [lbjlaq/Antigravity-Manager](https://github.com/lbjlaq/Antigravity-Manager) 的自用分支（依据 CC BY-NC-SA 4.0 保留原始署名）
 
 <div align="center">
   <img src="public/icon.png" width="100" height="100" alt="Antigravity Tools Logo">
@@ -7,19 +8,16 @@
   <p>多平台自动化运维与多账号矩阵调度控制台</p>
 
   <p>
-    <a href="https://github.com/lbjlaq/Antigravity-Manager/releases">
-      <img src="https://img.shields.io/github/v/release/lbjlaq/Antigravity-Manager?color=blue&style=flat-square" alt="GitHub release">
+    <a href="https://github.com/Adolph-Adolf/Antigravity-Manager/releases">
+      <img src="https://img.shields.io/github/v/release/Adolph-Adolf/Antigravity-Manager?color=blue&style=flat-square" alt="GitHub release">
     </a>
-    <a href="https://github.com/lbjlaq/Antigravity-Manager">
+    <a href="https://github.com/Adolph-Adolf/Antigravity-Manager">
       <img src="https://img.shields.io/badge/Version-4.7.5-blue?style=flat-square" alt="Version">
     </a>
     <img src="https://img.shields.io/badge/Frontend-React-61DAFB?style=flat-square" alt="React">
     <img src="https://img.shields.io/badge/License-CC--BY--NC--SA--4.0-lightgrey?style=flat-square" alt="License">
   </p>
 
-  <a href="https://trendshift.io/repositories/18224?utm_source=repository-badge&utm_medium=badge&utm_campaign=badge-repository-18224" target="_blank" rel="noopener noreferrer">
-    <img src="https://trendshift.io/api/badge/repositories/18224" alt="lbjlaq/Antigravity-Manager | Trendshift" width="250" height="55"/>
-  </a>
 
   <p>
     <a href="#-核心功能">核心功能</a> • 
@@ -62,12 +60,6 @@
 | 支付宝 (Alipay) | 微信支付 (WeChat) | Buy Me a Coffee |
 | :---: | :---: | :---: |
 | ![Alipay](./docs/images/donate_alipay.png) | ![WeChat](./docs/images/donate_wechat.png) | ![Coffee](./docs/images/donate_coffee.png) |
-
-## 🚀 推荐项目 (Recommended Projects)
-
-如果您喜欢本项目，可能也会对以下项目感兴趣：
-
-*   **[Antigravity-Tools-LS](https://github.com/lbjlaq/Antigravity-Tools-LS)**: 专为 AI 协议设计的语言服务器 (LSP)，为您提供更智能的代码补全、诊断和协议调试体验。
 
 ## 🌟 深度功能解析 (Detailed Features)
 
@@ -137,24 +129,24 @@ graph TD
 
 **Linux / macOS:**
 ```bash
-curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Adolph-Adolf/Antigravity-Manager/main/install.sh | bash
 ```
 
 **Windows (PowerShell):**
 ```powershell
-irm https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/Adolph-Adolf/Antigravity-Manager/main/install.ps1 | iex
 ```
 
 > **支持的格式**: Linux (`.deb` / `.rpm` / `.AppImage`) | macOS (`.dmg`) | Windows (NSIS `.exe`)
 >
-> **高级用法**: 安装指定版本 `curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.sh | bash -s -- --version 4.6.8`，预览模式 `curl -fsSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/install.sh | bash -s -- --dry-run`
+> **高级用法**: 安装指定版本 `curl -fsSL https://raw.githubusercontent.com/Adolph-Adolf/Antigravity-Manager/main/install.sh | bash -s -- --version 4.6.8`，预览模式 `curl -fsSL https://raw.githubusercontent.com/Adolph-Adolf/Antigravity-Manager/main/install.sh | bash -s -- --dry-run`
 
 #### macOS - Homebrew
 如果您已安装 [Homebrew](https://brew.sh/)，也可以通过以下命令安装：
 
 ```bash
 # 1. 订阅本仓库的 Tap
-brew tap lbjlaq/antigravity-manager https://github.com/lbjlaq/Antigravity-Manager
+brew tap ghcr.io/adolph-adolf/antigravity-manager https://github.com/Adolph-Adolf/Antigravity-Manager
 
 # 2. 安装应用
 brew install --cask antigravity-tools
@@ -165,12 +157,12 @@ brew install --cask antigravity-tools
 
 **方式 1：一键安装脚本 (推荐)**
 ```bash
-curl -sSL https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/deploy/arch/install.sh | bash
+curl -sSL https://raw.githubusercontent.com/Adolph-Adolf/Antigravity-Manager/main/deploy/arch/install.sh | bash
 ```
 
 **方式 2：通过 Homebrew** (如果您已安装 [Linuxbrew](https://sh.brew.sh/))
 ```bash
-brew tap lbjlaq/antigravity-manager https://github.com/lbjlaq/Antigravity-Manager
+brew tap ghcr.io/adolph-adolf/antigravity-manager https://github.com/Adolph-Adolf/Antigravity-Manager
 brew install --cask antigravity-tools
 ```
 
@@ -178,7 +170,7 @@ brew install --cask antigravity-tools
 安装后会自动将 AppImage 添加到二进制路径并配置可执行权限。
 
 ### 选项 B: 手动下载
-前往 [GitHub Releases](https://github.com/lbjlaq/Antigravity-Manager/releases) 下载对应系统的包：
+前往 [GitHub Releases](https://github.com/Adolph-Adolf/Antigravity-Manager/releases) 下载对应系统的包：
 *   **macOS**: `.dmg` (支持 Apple Silicon & Intel)
 *   **Windows**: `.msi` 或 便携版 `.zip`
 *   **Linux**: `.deb` 或 `AppImage`
@@ -196,7 +188,7 @@ docker run -d --name antigravity-manager \
   -e WEB_PASSWORD=your-login-password \
   -e ABV_MAX_BODY_SIZE=104857600 \
   -v ~/.antigravity_tools:/root/.antigravity_tools \
-  lbjlaq/antigravity-manager:latest
+  ghcr.io/adolph-adolf/antigravity-manager:latest
 
 # 忘记密钥？执行 docker logs antigravity-manager 或 grep -E '"api_key"|"admin_password"' ~/.antigravity_tools/gui_config.json
 
@@ -237,7 +229,7 @@ docker compose up -d
 
 ---
 
-Copyright © 2024-2026 [lbjlaq](https://github.com/lbjlaq)
+Copyright © 2024-2026 [lbjlaq](https://github.com/lbjlaq)（原始项目）· Fork © 2026 [Adolph-Adolf](https://github.com/Adolph-Adolf)
 
 <details>
 <summary><b>🛠️ 常见问题排查 (Troubleshooting) - 点击展开</b></summary>
@@ -465,7 +457,7 @@ response = client.chat.completions.create(
 <details>
 <summary><b>👥 核心贡献者 (Contributors) - 点击展开</b></summary>
 
-<a href="https://github.com/lbjlaq"><img src="https://github.com/lbjlaq.png" width="50px" style="border-radius: 50%;" alt="lbjlaq"/></a>
+<a href="https://github.com/Adolph-Adolf"><img src="https://github.com/Adolph-Adolf.png" width="50px" style="border-radius: 50%;" alt="Adolph-Adolf"/></a>
 <a href="https://github.com/XinXin622"><img src="https://github.com/XinXin622.png" width="50px" style="border-radius: 50%;" alt="XinXin622"/></a>
 <a href="https://github.com/llsenyue"><img src="https://github.com/llsenyue.png" width="50px" style="border-radius: 50%;" alt="llsenyue"/></a>
 <a href="https://github.com/salacoste"><img src="https://github.com/salacoste.png" width="50px" style="border-radius: 50%;" alt="salacoste"/></a>
@@ -521,5 +513,5 @@ response = client.chat.completions.create(
 
 <div align="center">
   <p>如果您觉得这个工具有所帮助，欢迎在 GitHub 上点一个 ⭐️</p>
-  <p>Copyright © 2025 Antigravity Team.</p>
+  <p>Copyright © 2026 [Adolph-Adolf](https://github.com/Adolph-Adolf) · 基于 lbjlaq/Antigravity-Manager</p>
 </div>
