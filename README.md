@@ -18,7 +18,6 @@
     <img src="https://img.shields.io/badge/License-CC--BY--NC--SA--4.0-lightgrey?style=flat-square" alt="License">
   </p>
 
-
   <p>
     <a href="#-核心功能">核心功能</a> • 
     <a href="#-界面导览">界面导览</a> • 
@@ -35,31 +34,9 @@
 
 ---
 
-**Antigravity Tools** 是一个专为开发者和 AI 爱好者设计的全功能桌面应用。它将多账号管理、协议转换和智能请求调度完美结合，为您提供一个稳定、极速且成本低廉的 **本地 AI 中转站**。
+**Antigravity Tools** 是一个专为开发者和 AI 爱好者设计的全功能桌面应用。它将多账号管理、协议转换和智能请求调度完美结合，为您提供一个稳定、极速且成本低廉的 **本地 AI 协议中继**。
 
 通过本应用，您可以将常见的 Web 端 Session (Google/Anthropic) 转化为标准化的 API 接口，消除不同厂商间的协议鸿沟。
-
-## 💖 赞助商 (Sponsors)
-
-| 赞助商 (Sponsor) | 简介 (Description) |
-| :---: | :--- |
-| <img src="docs/images/packycode_logo.png" width="200" alt="PackyCode Logo"> | 感谢 **PackyCode** 对本项目的赞助！PackyCode 是一家可靠高效的 API 中转服务商，提供 Claude Code、Codex、Gemini 等多种服务的中转。PackyCode 为本项目的用户提供了特别优惠：使用[此链接](https://www.packyapi.com/register?aff=Ctrler)注册，并在充值时输入 **“Ctrler”** 优惠码即可享受 **九折优惠**。 |
-| <img src="docs/images/APIKEYFUN.png" width="200" alt="APIKEYFUN Logo"> | 感谢 APIKEY.FUN 赞助本项目！APIKEY.FUN 是一家专业的企业级 AI 中转站，致力于为企业和个人开发者提供稳定、高效、低成本的 AI 模型 API 接入服务。平台支持 Claude、OpenAI、Gemini 等主流热门模型，价格低至官方原价的 7%。通过本项目[专属链接](https://apikey.fan/register?aff=Ctrler)注册，还可享受最高 **充值永久 95 折** 专属优惠。 |
-| <img src="docs/images/claudeapilogo.png" width="200" alt="Claude API Logo"> | 感谢 **Claude API** 对本项目的支持！claudeapi.com 是一家走**官方与 AWS 渠道**接入的 **Claude API** 中转站，专注 Claude，主打高稳定、低延迟，完整支持 Claude Code。为本项目用户提供专属福利：通过[专属链接](https://console.claudeapi.com/register?source=antigravity)注册即送**免费测试额度，零门槛跑通**；充值再享 **95 折**专属优惠(联系客服）。 |
-| <img src="docs/images/AICodeMirror.jpg" width="200" alt="AICodeMirror Logo"> | 感谢 AICodeMirror 赞助了本项目！AICodeMirror 提供 Claude Code / Codex / Gemini CLI 官方高稳定中转服务，支持企业级高并发、极速开票、7×24 专属技术支持。 Claude Code / Codex / Gemini 官方渠道低至 3.8 / 0.2 / 0.9 折，充值更有折上折！AICodeMirror 为 Antigravity-Manager 的用户提供了特别福利，通过[此链接](https://aicodemirror.ai/register?invitecode=MV5XUM)注册的用户，可享受首充8折，企业客户最高可享 7.5 折！ |
-
-
-
-
-### ☕ 支持项目 (Support)
-
-如果您觉得本项目对您有所帮助，欢迎打赏作者！
-
-<a href="https://www.buymeacoffee.com/Ctrler" target="_blank"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-green.png" alt="请我喝杯咖啡" style="height: 60px !important; width: 217px !important;"></a>
-
-| 支付宝 (Alipay) | 微信支付 (WeChat) | Buy Me a Coffee |
-| :---: | :---: | :---: |
-| ![Alipay](./docs/images/donate_alipay.png) | ![WeChat](./docs/images/donate_wechat.png) | ![Coffee](./docs/images/donate_coffee.png) |
 
 ## 🌟 深度功能解析 (Detailed Features)
 
@@ -119,63 +96,24 @@ graph TD
     ResponseMapper --> Client
 ```
 
-##  安装指南 (Installation)
+## 📥 安装指南 (Installation)
 
-### 选项 A: 终端安装 (推荐)
+本项目只提供两种安装方式：**Windows 安装包**与 **Docker 镜像**。
 
-#### 跨平台一键安装脚本
+### 选项 A: Windows 安装包
 
-自动检测操作系统、架构和包管理器，一条命令完成下载与安装。
+前往 [Releases](https://github.com/Adolph-Adolf/Antigravity-Manager/releases) 下载：
 
-**Linux / macOS:**
-```bash
-curl -fsSL https://raw.githubusercontent.com/Adolph-Adolf/Antigravity-Manager/main/install.sh | bash
-```
+| 文件 | 说明 |
+| --- | --- |
+| `Antigravity.Tools_x.y.z_x64-setup.exe` | NSIS 安装包（推荐，创建开始菜单与桌面快捷方式） |
+| `Antigravity.Tools_x.y.z_x64_en-US.msi` | MSI 安装包（适合静默安装 / 批量部署） |
 
-**Windows (PowerShell):**
-```powershell
-irm https://raw.githubusercontent.com/Adolph-Adolf/Antigravity-Manager/main/install.ps1 | iex
-```
+> **系统要求**: Windows 10/11 (x64)，需要 WebView2 运行时（系统通常已自带）。
+> **安装前请退出旧版客户端**: 本版本应用标识为 `com.adolphjau.antigravity-tools`，与旧版 `com.lbjlaq.*` 属于**两个独立应用**，可同时存在、互不干扰。
+> **数据目录**: 与旧版共用 `~/.antigravity_tools`，账号与配置自动继承，无需迁移。
 
-> **支持的格式**: Linux (`.deb` / `.rpm` / `.AppImage`) | macOS (`.dmg`) | Windows (NSIS `.exe`)
->
-> **高级用法**: 安装指定版本 `curl -fsSL https://raw.githubusercontent.com/Adolph-Adolf/Antigravity-Manager/main/install.sh | bash -s -- --version 4.6.8`，预览模式 `curl -fsSL https://raw.githubusercontent.com/Adolph-Adolf/Antigravity-Manager/main/install.sh | bash -s -- --dry-run`
-
-#### macOS - Homebrew
-如果您已安装 [Homebrew](https://brew.sh/)，也可以通过以下命令安装：
-
-```bash
-# 1. 订阅本仓库的 Tap
-brew tap ghcr.io/adolph-adolf/antigravity-manager https://github.com/Adolph-Adolf/Antigravity-Manager
-
-# 2. 安装应用
-brew install --cask antigravity-tools
-```
-
-#### Arch Linux
-您可以选择通过一键安装脚本或 Homebrew 进行安装：
-
-**方式 1：一键安装脚本 (推荐)**
-```bash
-curl -sSL https://raw.githubusercontent.com/Adolph-Adolf/Antigravity-Manager/main/deploy/arch/install.sh | bash
-```
-
-**方式 2：通过 Homebrew** (如果您已安装 [Linuxbrew](https://sh.brew.sh/))
-```bash
-brew tap ghcr.io/adolph-adolf/antigravity-manager https://github.com/Adolph-Adolf/Antigravity-Manager
-brew install --cask antigravity-tools
-```
-
-#### 其他 Linux 发行版
-安装后会自动将 AppImage 添加到二进制路径并配置可执行权限。
-
-### 选项 B: 手动下载
-前往 [GitHub Releases](https://github.com/Adolph-Adolf/Antigravity-Manager/releases) 下载对应系统的包：
-*   **macOS**: `.dmg` (支持 Apple Silicon & Intel)
-*   **Windows**: `.msi` 或 便携版 `.zip`
-*   **Linux**: `.deb` 或 `AppImage`
-
-### 选项 C: Docker 部署 (推荐用于 NAS/服务器)
+### 选项 B: Docker 部署 (推荐用于 NAS/服务器)
 如果您希望在容器化环境中运行，我们提供了原生的 Docker 镜像。该镜像内置了对 v4.0.2 原生 Headless 架构的支持，可自动托管前端静态资源，并通过浏览器直接进行管理。
 
 ```bash
@@ -228,35 +166,6 @@ docker compose up -d
 > **详情见**: [Docker 部署指南 (docker)](./docker/README.md)
 
 ---
-
-Copyright © 2024-2026 [lbjlaq](https://github.com/lbjlaq)（原始项目）· Fork © 2026 [Adolph-Adolf](https://github.com/Adolph-Adolf)
-
-<details>
-<summary><b>🛠️ 常见问题排查 (Troubleshooting) - 点击展开</b></summary>
-
-#### macOS 提示“应用已损坏，无法打开”？
-由于 macOS 的安全机制，非 App Store 下载的应用可能会触发此提示。您可以按照以下步骤快速修复：
-
-1.  **命令行修复** (推荐):
-    打开终端，执行以下命令：
-    ```bash
-    sudo xattr -rd com.apple.quarantine "/Applications/Antigravity Tools.app"
-    ```
-2.  **Homebrew 安装优势**:
-    现在通过 Homebrew (`brew install --cask antigravity-tools`) 安装时，系统会在安装末尾自动执行清理属性的操作，**真正实现开箱即用**。
-
-#### Linux 窗口全黑 / 透明框？
-在 niri、Hyprland、Sway 等合成器上，旧版本会因为会话里总有 `DISPLAY` 而强制走 X11，WebKit 主界面可能全黑。请更新到包含该修复的版本；或临时：
-
-```bash
-env WEBKIT_DISABLE_DMABUF_RENDERER=1 ANTIGRAVITY_FORCE_WAYLAND=1 antigravity-tools
-```
-
-- `ANTIGRAVITY_FORCE_WAYLAND=1`: 保持原生 Wayland（不强制切 X11）
-- `ANTIGRAVITY_FORCE_X11=1`: 仍需走 X11 时强制启用
-- `WEBKIT_DISABLE_DMABUF_RENDERER=1`: 禁用 WebKit DMA-BUF 渲染器
-
-</details>
 
 ## 🔌 快速接入示例
 

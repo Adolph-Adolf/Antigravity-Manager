@@ -40,29 +40,6 @@
 
 By leveraging this app, you can transform common Web Sessions (Google/Anthropic) into standardized API interfaces, completely eliminating the protocol gap between different providers.
 
-## 💖 Sponsors
-
-| Sponsor | Description |
-| :---: | :--- |
-| <img src="docs/images/packycode_logo.png" width="200" alt="PackyCode Logo"> | Thanks to **PackyCode** for sponsoring this project! PackyCode is a reliable and efficient API relay service provider, offering relays for various services such as Claude Code, Codex, and Gemini. PackyCode provides a special offer for users of this project: Register using [this link](https://www.packyapi.com/register?aff=Ctrler) and enter the **"Ctrler"** coupon code when topping up to enjoy a **10% discount**. |
-| <img src="docs/images/APIKEYFUN.png" width="200" alt="APIKEYFUN Logo"> | Thanks to **APIKEY.FUN** for sponsoring this project! APIKEY.FUN is a professional enterprise-grade AI relay station, dedicated to providing stable, efficient, and low-cost AI model API access services for enterprise and individual developers. The platform supports mainstream popular models such as Claude, OpenAI, and Gemini, with prices as low as 7% of the official original price. Register through [this exclusive link](https://apikey.fan/register?aff=Ctrler) for this project to enjoy an exclusive offer of up to **permanent 5% off on top-ups**. |
-| <img src="docs/images/claudeapilogo.png" width="200" alt="Claude API Logo"> | Thanks to **Claude API** for supporting this project! claudeapi.com is a **Claude API** relay station built on **official and AWS channels**, focused exclusively on Claude, delivering high stability and low latency with full support for Claude Code. Exclusive offer: register via this [exclusive link](https://console.claudeapi.com/register?source=antigravity) to get **free trial credits — zero setup, get started instantly**; enjoy an extra **5% off** when you top up（Contact Support). |
-| <img src="docs/images/AICodeMirror.jpg" width="200" alt="AICodeMirror Logo"> | Thanks to **AICodeMirror** for sponsoring this project! AICodeMirror provides official high-stability relay services for Claude Code / Codex / Gemini CLI, supporting enterprise-grade concurrency, fast invoicing, and 24/7 dedicated technical support. Claude Code / Codex / Gemini official channels at 38% / 2% / 9% of original price, with extra discounts on top-ups! AICodeMirror offers special benefits for Antigravity-Manager users: register via [this link](https://aicodemirror.ai/register?invitecode=MV5XUM) to enjoy 20% off your first top-up, and enterprise customers can get up to 25% off! |
-
-
-
-
-
-### ☕ Support
-
-If you find this project helpful, feel free to buy me a coffee!
-
-<a href="https://www.buymeacoffee.com/Ctrler" target="_blank"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-green.png" alt="Buy Me A Coffee" style="height: 60px !important; width: 217px !important;"></a>
-
-| Alipay | WeChat Pay | Buy Me a Coffee |
-| :---: | :---: | :---: |
-| ![Alipay](./docs/images/donate_alipay.png) | ![WeChat](./docs/images/donate_wechat.png) | ![Coffee](./docs/images/donate_coffee.png) |
-
 ## 🌟 Detailed Feature Matrix
 
 ### 1. 🎛️ Smart Account Dashboard
@@ -123,61 +100,22 @@ graph TD
 
 ## 📥 Installation
 
-### Option A: Terminal Installation (Recommended)
+This project ships two installation methods: **the Windows installer** and **the Docker image**.
 
-#### Cross-Platform One-Line Install Scripts
+### Option A: Windows Installer
 
-Automatically detects your OS, architecture, and package manager — one command to download and install.
+Download from [Releases](https://github.com/Adolph-Adolf/Antigravity-Manager/releases):
 
-**Linux / macOS:**
-```bash
-curl -fsSL https://raw.githubusercontent.com/Adolph-Adolf/Antigravity-Manager/main/install.sh | bash
-```
+| File | Description |
+| --- | --- |
+| `Antigravity.Tools_x.y.z_x64-setup.exe` | NSIS installer (recommended; adds Start Menu & desktop shortcuts) |
+| `Antigravity.Tools_x.y.z_x64_en-US.msi` | MSI installer (for silent / batch deployment) |
 
-**Windows (PowerShell):**
-```powershell
-irm https://raw.githubusercontent.com/Adolph-Adolf/Antigravity-Manager/main/install.ps1 | iex
-```
+> **Requirements**: Windows 10/11 (x64) with the WebView2 runtime (usually preinstalled).
+> **Close the old client first**: this build's identifier is `com.adolphjau.antigravity-tools`; an older `com.lbjlaq.*` install is a **separate application** and both can coexist.
+> **Data directory**: shared with the old build at `~/.antigravity_tools` — accounts and settings carry over, no migration needed.
 
-> **Supported formats**: Linux (`.deb` / `.rpm` / `.AppImage`) | macOS (`.dmg`) | Windows (NSIS `.exe`)
->
-> **Advanced usage**: Install a specific version `curl -fsSL https://raw.githubusercontent.com/Adolph-Adolf/Antigravity-Manager/main/install.sh | bash -s -- --version 4.6.8`, dry-run mode `curl -fsSL https://raw.githubusercontent.com/Adolph-Adolf/Antigravity-Manager/main/install.sh | bash -s -- --dry-run`
-
-#### macOS - Homebrew
-If you have [Homebrew](https://brew.sh/) installed, you can also install via:
-
-```bash
-# 1. Tap the repository
-brew tap ghcr.io/adolph-adolf/antigravity-manager https://github.com/Adolph-Adolf/Antigravity-Manager
-
-# 2. Install the app
-brew install --cask antigravity-tools
-```
-
-#### Arch Linux
-You can choose to install via the one-click script or Homebrew:
-
-**Option 1: One-click script (Recommended)**
-```bash
-curl -sSL https://raw.githubusercontent.com/Adolph-Adolf/Antigravity-Manager/main/deploy/arch/install.sh | bash
-```
-
-**Option 2: via Homebrew** (If you have [Linuxbrew](https://sh.brew.sh/) installed)
-```bash
-brew tap ghcr.io/adolph-adolf/antigravity-manager https://github.com/Adolph-Adolf/Antigravity-Manager
-brew install --cask antigravity-tools
-```
-
-#### Other Linux Distributions
-The AppImage will be automatically symlinked to your binary path with executable permissions.
-
-### Option B: Manual Download
-Download from [GitHub Releases](https://github.com/Adolph-Adolf/Antigravity-Manager/releases):
-*   **macOS**: `.dmg` (Universal, Apple Silicon & Intel)
-*   **Windows**: `.msi` or portable `.zip`
-*   **Linux**: `.deb` or `AppImage`
-
-### Option C: Docker Deployment (Recommended for NAS/Servers)
+### Option B: Docker Deployment (Recommended for NAS/Servers)
 If you prefer running in a containerized environment, we provide a native Docker image. This image supports the v4.0.3 Native Headless architecture, automatically hosts frontend static resources, and allows for direct browser-based management.
 
 ```bash
@@ -229,27 +167,6 @@ docker compose up -d
 > - **Architecture**: Supports x86_64 and ARM64.
 > **See**: [Docker Deployment Guide (docker)](./docker/README.md)
 
-<details>
-<summary><b>🛠️ Troubleshooting - Click to expand</b></summary>
-
-#### macOS says "App is damaged"?
-Due to macOS security gatekeeper, non-App Store apps might show this. Run this in Terminal to fix:
-```bash
-sudo xattr -rd com.apple.quarantine "/Applications/Antigravity Tools.app"
-```
-
-#### Linux window is black or empty?
-On niri, Hyprland, Sway, and similar compositors, older builds forced `GDK_BACKEND=x11` whenever `DISPLAY` was set, and WebKit then drew a black window. Update to a build that includes this fix, or launch once with:
-
-```bash
-env WEBKIT_DISABLE_DMABUF_RENDERER=1 ANTIGRAVITY_FORCE_WAYLAND=1 antigravity-tools
-```
-
-- `ANTIGRAVITY_FORCE_WAYLAND=1`: keep native Wayland (do not force X11)
-- `ANTIGRAVITY_FORCE_X11=1`: force X11 if you still need it
-- `WEBKIT_DISABLE_DMABUF_RENDERER=1`: disable the WebKit DMA-BUF renderer
-
-</details>
 
 ## 🔌 Quick Integration Examples
 
