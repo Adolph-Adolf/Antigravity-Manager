@@ -2,6 +2,47 @@
 > Professional AI Account Management & Protocol Proxy System (v4.7.5)
 > This repository is a personal fork of [lbjlaq/Antigravity-Manager](https://github.com/lbjlaq/Antigravity-Manager) (original attribution retained per CC BY-NC-SA 4.0).
 
+---
+
+## ✨ Changes in This Fork
+
+> The complete set of changes relative to upstream `v4.7.5`; unlisted behaviour is identical to upstream.
+
+### 1. `/v1/models` family trimmed to canonical model names
+
+Upstream returns **76** model aliases (the same model appears under several spellings); this fork returns the **17 canonical names** shown in the "Supported Models & Integrations" table, through a single shared code path so all three endpoints stay identical in content and order:
+
+| Endpoint | Upstream | This fork |
+| --- | --- | --- |
+| `/v1/models` (OpenAI compatible) | 76 aliases | **17 canonical names** |
+| `/v1/models/claude` (Claude compatible) | 76 aliases | **17 canonical names** |
+| `/v1beta/models` (Gemini compatible) | 76 aliases | **17 canonical names** |
+
+> **Why**: what the UI shows and what the API returns are now the same list, so client model pickers are no longer flooded with synonymous aliases.
+> **Compatibility**: every canonical name is an existing upstream alias and the routing tables are unchanged; other upstream aliases still work if called directly — they just no longer appear in the listing endpoints.
+
+### 2. Per-model enable / disable toggles
+
+The **API Proxy → Supported Models & Integrations** table gained a toggle in its actions column: turning a model off removes it from the three listing endpoints above. All models are enabled by default.
+
+- Takes effect **immediately on save** (no service or container restart), and survives restarts and redeploys
+- Useful for hiding models you don't want clients to see (e.g. keep only Opus / Sonnet and hide the image models)
+
+### 3. Upstream "relay station" promo page removed
+
+The promo page, its navigation entry and its strings in all 12 locale files were deleted.
+
+### 4. Update check and signing point at this repository
+
+The in-app update check targets this repository (no more upstream release prompts) and updater artifacts are signed with this repository's own key.
+
+### 5. App identifier and installation methods
+
+- Identifier: `com.adolphjau.antigravity-tools` — an older upstream `com.lbjlaq.*` install is a **separate application**, so the two can coexist
+- Data directory is unchanged (`~/.antigravity_tools`) and shared with the old build — accounts and settings carry over
+- Only two installation methods are supported: **the Windows installer** and **the Docker image** (see "Installation" below)
+
+
 <div align="center">
   <img src="public/icon.png" width="100" height="100" alt="Antigravity Tools Logo">
   <h3>Antigravity Tools</h3>
