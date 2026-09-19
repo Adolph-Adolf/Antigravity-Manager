@@ -3,12 +3,50 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-const GITHUB_API_URL: &str =
-    "https://api.github.com/repos/lbjlaq/Antigravity-Manager/releases/latest";
-const GITHUB_RAW_URL: &str =
-    "https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/package.json";
-const JSDELIVR_URL: &str =
-    "https://cdn.jsdelivr.net/gh/lbjlaq/Antigravity-Manager@main/package.json";
+/// 更新检查的目标仓库（`owner/repo`）。
+///
+/// 自用版改动：指向本 fork，避免启动时提示上游新版本。
+/// 换 fork / 换仓库时只需改这一处，以及 `tauri.conf.json` 里的 updater endpoint。
+const GITHUB_REPO: &str = "Adolph-Adolf/Antigravity-Manager";
+
+fn github_api_url() -> String {
+    format!(
+        "https://api.github.com/repos/{}/releases/latest",
+        GITHUB_REPO
+    )
+}
+
+fn github_raw_url() -> String {
+    format!(
+        "https://raw.githubusercontent.com/{}/main/package.json",
+        GITHUB_REPO
+    )
+}
+
+fn jsdelivr_url() -> String {
+    format!(
+        "https://cdn.jsdelivr.net/gh/{}@main/package.json",
+        GITHUB_REPO
+    )
+}
+
+fn updater_json_url() -> String {
+    format!(
+        "https://github.com/{}/releases/latest/download/updater.json",
+        GITHUB_REPO
+    )
+}
+
+fn releases_latest_url() -> String {
+    format!("https://github.com/{}/releases/latest", GITHUB_REPO)
+}
+
+fn release_tag_url(version: &str) -> String {
+    format!(
+        "https://github.com/{}/releases/tag/v{}",
+        GITHUB_REPO, version
+    )
+}
 const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 const DEFAULT_CHECK_INTERVAL_HOURS: u64 = 24;
 
@@ -55,9 +93,6 @@ struct GitHubRelease {
     body: String,
     published_at: String,
 }
-
-const UPDATER_JSON_URL: &str =
-    "https://github.com/lbjlaq/Antigravity-Manager/releases/latest/download/updater.json";
 
 pub fn get_upstream_proxy_url() -> Option<String> {
     if let Ok(config) = crate::modules::config::load_app_config() {
@@ -124,7 +159,7 @@ async fn check_for_updates_internal() -> Result<UpdateInfo, String> {
     }
 
     // 3. Try GitHub Raw
-    match check_static_url(GITHUB_RAW_URL, "GitHub Raw").await {
+    match check_static_url(&github_raw_url(), "GitHub Raw").await {
         Ok(info) => return Ok(info),
         Err(e) => {
             logger::log_warn(&format!(
@@ -135,7 +170,7 @@ async fn check_for_updates_internal() -> Result<UpdateInfo, String> {
     }
 
     // 4. Try jsDelivr
-    match check_static_url(JSDELIVR_URL, "jsDelivr").await {
+    match check_static_url(&jsdelivr_url(), "jsDelivr").await {
         Ok(info) => return Ok(info),
         Err(e) => {
             logger::log_error(&format!("All update checks failed. Last error: {}", e));
@@ -156,7 +191,7 @@ async fn check_updater_json() -> Result<UpdateInfo, String> {
     logger::log_info("Checking for updates via updater.json...");
 
     let response = client
-        .get(UPDATER_JSON_URL)
+        .get(updater_json_url())
         .send()
         .await
         .map_err(|e| format!("Request failed: {}", e))?;
@@ -189,10 +224,7 @@ async fn check_updater_json() -> Result<UpdateInfo, String> {
         ));
     }
 
-    let download_url = format!(
-        "https://github.com/lbjlaq/Antigravity-Manager/releases/tag/v{}",
-        latest_version
-    );
+    let download_url = release_tag_url(&latest_version);
 
     Ok(UpdateInfo {
         current_version,
@@ -242,7 +274,7 @@ async fn check_github_api() -> Result<UpdateInfo, String> {
     logger::log_info("Checking for updates via GitHub API...");
 
     let response = client
-        .get(GITHUB_API_URL)
+        .get(github_api_url())
         .send()
         .await
         .map_err(|e| format!("Request failed: {}", e))?;
@@ -330,7 +362,7 @@ async fn check_static_url(url: &str, source_name: &str) -> Result<UpdateInfo, St
     }
 
     // fallback sources generally don't provide release notes or download specific URL, construct generic
-    let download_url = "https://github.com/lbjlaq/Antigravity-Manager/releases/latest".to_string();
+    let download_url = releases_latest_url();
     let release_notes = format!(
         "New version detected via {}. Please check release page for details.",
         source_name
