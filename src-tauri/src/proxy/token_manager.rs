@@ -6877,11 +6877,14 @@ mod tests {
         let manager = TokenManager::new(temp_dir.path().to_path_buf());
 
         let target_model = "claude-sonnet-4-6";
+        let norm_target =
+            crate::proxy::common::model_mapping::normalize_to_standard_id(target_model)
+                .unwrap_or_else(|| target_model.to_string());
         let mut quotas1 = HashMap::new();
-        quotas1.insert(target_model.to_string(), 0); // 0% 额度
+        quotas1.insert(norm_target.clone(), 0); // 0% 额度
 
         let mut quotas2 = HashMap::new();
-        quotas2.insert(target_model.to_string(), 100); // 100% 额度
+        quotas2.insert(norm_target, 100); // 100% 额度
 
         let mut token1 = create_test_token("acc1@test.com", Some("PRO"), 1.0, None, Some(0));
         token1.account_id = acc1_id.to_string();
@@ -6941,11 +6944,14 @@ mod tests {
         let manager = TokenManager::new(temp_dir.path().to_path_buf());
 
         let target_model = "gemini-3.8-flash-high";
+        let norm_target =
+            crate::proxy::common::model_mapping::normalize_to_standard_id(target_model)
+                .unwrap_or_else(|| target_model.to_string());
         let mut quotas1 = HashMap::new();
-        quotas1.insert(target_model.to_string(), 0); // 优先账号为 0% 额度
+        quotas1.insert(norm_target.clone(), 0); // 优先账号为 0% 额度
 
         let mut quotas2 = HashMap::new();
-        quotas2.insert(target_model.to_string(), 80); // 备选账号具备 80% 额度
+        quotas2.insert(norm_target, 80); // 备选账号具备 80% 额度
 
         let mut token1 = create_test_token("pref@test.com", Some("PRO"), 1.0, None, Some(0));
         token1.account_id = acc_pref_id.to_string();
