@@ -571,7 +571,9 @@ mod tests {
             validation_blocked: true,
             validation_blocked_until: Some(1791541969),
             validation_blocked_reason: Some("VALIDATION_REQUIRED".to_string()),
-            validation_url: Some("https://accounts.google.com/signin/continue?flowName=GlifWebSignIn".to_string()),
+            validation_url: Some(
+                "https://accounts.google.com/signin/continue?flowName=GlifWebSignIn".to_string(),
+            ),
             quota: None,
             device_bound: true,
             last_used: 1728000000,

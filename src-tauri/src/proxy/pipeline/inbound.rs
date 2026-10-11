@@ -1231,6 +1231,7 @@ impl InboundThinkingPipeline {
             if let Some(budget) = final_budget {
                 if budget == 0 {
                     tc = json!({
+                        "includeThoughts": false,
                         "thinkingBudget": 0
                     });
                 } else {
@@ -1340,6 +1341,9 @@ impl InboundThinkingPipeline {
                     .and_then(Value::as_object_mut)
                 {
                     tc.insert("thinkingBudget".to_string(), json!(final_budget));
+                    if final_budget == 0 {
+                        tc.insert("includeThoughts".to_string(), json!(false));
+                    }
                 }
             }
         }

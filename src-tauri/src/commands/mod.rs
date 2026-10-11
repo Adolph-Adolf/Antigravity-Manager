@@ -529,14 +529,8 @@ pub async fn save_config(
             .update_proxy(config.proxy.upstream_proxy.clone())
             .await;
         admin.axum_server.update_security(&config.proxy).await;
-        admin
-            .axum_server
-            .update_experimental(&config.proxy)
-            .await;
-        admin
-            .axum_server
-            .update_debug_logging(&config.proxy)
-            .await;
+        admin.axum_server.update_experimental(&config.proxy).await;
+        admin.axum_server.update_debug_logging(&config.proxy).await;
         admin.axum_server.update_user_agent(&config.proxy).await;
         admin
             .axum_server

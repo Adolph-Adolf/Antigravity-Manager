@@ -508,7 +508,11 @@ mod tests {
     #[test]
     fn write_profile_auto_creates_missing_storage_json() {
         let tmp = tempfile::tempdir().unwrap();
-        let storage_path = tmp.path().join("nested").join("globalStorage").join("storage.json");
+        let storage_path = tmp
+            .path()
+            .join("nested")
+            .join("globalStorage")
+            .join("storage.json");
         assert!(!storage_path.exists());
 
         let profile = DeviceProfile {
@@ -518,10 +522,12 @@ mod tests {
             sqm_id: "sqm-auto".to_string(),
         };
         // 自动创建父目录与 storage.json，不再因缺少文件而报错 (Fixes #3270)
-        write_profile(&storage_path, &profile).expect("write_profile must succeed even if storage.json was missing");
+        write_profile(&storage_path, &profile)
+            .expect("write_profile must succeed even if storage.json was missing");
         assert!(storage_path.exists());
 
-        let read_back = read_profile(&storage_path).expect("read_profile must read auto-created profile");
+        let read_back =
+            read_profile(&storage_path).expect("read_profile must read auto-created profile");
         assert_eq!(read_back.machine_id, "machine-auto");
         assert_eq!(read_back.dev_device_id, "dev-auto");
     }

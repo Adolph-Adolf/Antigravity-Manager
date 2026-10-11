@@ -392,6 +392,10 @@ pub fn init_db() -> Result<(), String> {
         "ALTER TABLE request_logs ADD COLUMN cached_tokens INTEGER",
         [],
     );
+    let _ = conn.execute(
+        "ALTER TABLE request_logs ADD COLUMN reasoning_tokens INTEGER",
+        [],
+    );
     let _ = conn.execute("ALTER TABLE request_logs ADD COLUMN account_email TEXT", []);
     let _ = conn.execute("ALTER TABLE request_logs ADD COLUMN mapped_model TEXT", []);
     let _ = conn.execute("ALTER TABLE request_logs ADD COLUMN protocol TEXT", []);
@@ -509,15 +513,16 @@ fn map_request_log_row(row: &rusqlite::Row) -> rusqlite::Result<ProxyRequestLog>
         input_tokens: row.get(11).unwrap_or(None),
         output_tokens: row.get(12).unwrap_or(None),
         cached_tokens: row.get(13).unwrap_or(None),
-        account_email: row.get(14).unwrap_or(None),
-        mapped_model: row.get(15).unwrap_or(None),
-        protocol: row.get(16).unwrap_or(None),
-        client_ip: row.get(17).unwrap_or(None),
-        username: row.get(18).unwrap_or(None),
-        request_headers: row.get(19).unwrap_or(None),
-        upstream_request_headers: row.get(20).unwrap_or(None),
-        response_headers: row.get(21).unwrap_or(None),
-        session_id: row.get(22).unwrap_or(None),
+        reasoning_tokens: row.get(14).unwrap_or(None),
+        account_email: row.get(15).unwrap_or(None),
+        mapped_model: row.get(16).unwrap_or(None),
+        protocol: row.get(17).unwrap_or(None),
+        client_ip: row.get(18).unwrap_or(None),
+        username: row.get(19).unwrap_or(None),
+        request_headers: row.get(20).unwrap_or(None),
+        upstream_request_headers: row.get(21).unwrap_or(None),
+        response_headers: row.get(22).unwrap_or(None),
+        session_id: row.get(23).unwrap_or(None),
     })
 }
 
@@ -1719,8 +1724,8 @@ fn save_log_with_connection(
     make_room(conn, budget, log_bytes)?;
 
     conn.execute(
-        "INSERT INTO request_logs (id, timestamp, method, url, status, duration, model, error, request_body, upstream_request_body, response_body, input_tokens, output_tokens, cached_tokens, account_email, mapped_model, protocol, client_ip, username, request_headers, upstream_request_headers, response_headers, session_id)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23)",
+        "INSERT INTO request_logs (id, timestamp, method, url, status, duration, model, error, request_body, upstream_request_body, response_body, input_tokens, output_tokens, cached_tokens, reasoning_tokens, account_email, mapped_model, protocol, client_ip, username, request_headers, upstream_request_headers, response_headers, session_id)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24)",
         params![
             log.id,
             log.timestamp,
@@ -1736,6 +1741,7 @@ fn save_log_with_connection(
             log.input_tokens,
             log.output_tokens,
             log.cached_tokens,
+            log.reasoning_tokens,
             log.account_email,
             log.mapped_model,
             log.protocol,
@@ -1759,7 +1765,7 @@ pub fn get_logs_summary(limit: usize, offset: usize) -> Result<Vec<ProxyRequestL
         .prepare(
             "SELECT id, timestamp, method, url, status, duration, model, substr(error, 1, 1024),
                 NULL as request_body, NULL as upstream_request_body, NULL as response_body,
-                input_tokens, output_tokens, cached_tokens, account_email, mapped_model, protocol, client_ip, username,
+                input_tokens, output_tokens, cached_tokens, reasoning_tokens, account_email, mapped_model, protocol, client_ip, username,
                 NULL as request_headers, NULL as upstream_request_headers, NULL as response_headers,
                 session_id
          FROM request_logs 
@@ -1816,7 +1822,7 @@ pub fn get_log_detail(log_id: &str) -> Result<ProxyRequestLog, String> {
         .prepare(
             "SELECT id, timestamp, method, url, status, duration, model, error,
                 request_body, upstream_request_body, response_body, input_tokens, output_tokens,
-                cached_tokens, account_email, mapped_model, protocol, client_ip, username,
+                cached_tokens, reasoning_tokens, account_email, mapped_model, protocol, client_ip, username,
                 request_headers, upstream_request_headers, response_headers,
                 session_id
          FROM request_logs

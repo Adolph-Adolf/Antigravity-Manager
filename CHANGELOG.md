@@ -3,6 +3,37 @@
 > 完整版本历史记录。返回项目主页请查看 [README_ZH.md](README_ZH.md) | [English Changelog](CHANGELOG_EN.md)。
 
 *   **版本演进**:
+    *   **v4.9.7-beta.8 (2026-10-11)**:
+        -   **[Token 统计「总览看板」与「深度洞察」视界接入、全链路思考量 (Thinking) 统计与全景深色主题统一]**:
+            -   **全链路思考量 (Thinking / Reasoning Tokens) 统计支持**:
+                -   **后端与存储全量对齐**: 代理层（`proxy_db` 与 `token_stats` 数据库）全面扩展 `reasoning_tokens` 字段并支持平滑迁移，在 SSE 流式及非流式响应中自动从 `usageMetadata` 与各协议返回中提取模型深度思考 Token 消耗并持久化。
+                -   **全维度聚合与查询支持**: 小时/天/周/全部历史、账号维度与模型维度的统计接口均扩展思考量聚合，提供精确的思考 Token 规模及均次思考指标支持。
+                -   **总览看板深度集成**: 「用量调度全景」卡片常驻呈现思考 Token 专属紫色指标与输出占比（`思: XX (YY%)`），下半区「效能指数 · J23」标题栏同步展示单次请求思考量密度（`~XX 思 / req`），全 12 国语言无缝支持。
+            -   **「总览看板」全新视界与体验调优**: 新增「总览看板」模式，集成 360° 辐射彩针发光仪、核心模型生态分布、24 小时律动立柱、J23 效能刻度仪表与活跃账号排行榜；支持单模型高亮聚焦与交互联动。
+            -   **深色主题背景与组件层级统一规范**: 彻底清除硬编码深色背景（`dark:bg-[#0a0a0c]`、`dark:bg-[#121316]`、`dark:bg-[#1c1c1e]` 等），全面统一对齐系统全局设计规范（卡片容器 `dark:bg-base-100`、药丸与分段控制器 `dark:bg-base-200`、边框 `dark:border-base-200/300`），完美消除粘性导航栏与页面接缝色差，统一经典看板与新看板的明暗调性。
+            -   **Token 统计全 12 种多国语言完备支持**: 全量同步并补齐 `token_stats` i18n 键值至所有 12 种语言本地化文件（包含英语、西语、俄语、阿语、日语、韩语、葡语、土耳其语、越南语、缅甸语及简繁中文），解耦自然周周数格式化硬编码。
+            -   **图表 Tooltip 与价格配置弹窗暗色调谐**: 优化趋势图/饼图浮层 Tooltip 与模型自定义价格配置弹窗（`PricingModal`）在深色模式下的底色透明度、输入框及重置按钮对比度，保证全局交互体验自洽舒适。
+        -   **[智能多维调度增强：周配额临期优先、零配额长对话无感迁移、跨模型隔离与 Claude 压缩自愈加固] (PR #3640, PR #3641, PR #3642, PR #3644, PR #3645, PR #3647, PR #3650, Thanks to @modded-soldier-9, @cubelikeplayDaniel)**:
+            -   **周配额临期优先调度算法 (EDF / Use-It-Or-Lose-It)**: 从账号配额详情中精准提取 Google 7d/weekly 桶配额重置时间戳，在多账号调度与 P2C 随机选号中引入最早截止时间优先规则（Priority 0.5）。当账号处于临期窗口（周配额 <= 24h 或 5h 滚动配额 <= 2h 且额度 > 0%）时赋予优先调度权，在被 Google 周期重置前优先消耗释放，彻底根除高配额优先策略导致的临期剩余资产白白作废清零问题。 (PR #3645, Fixes #549, Ref #900, Thanks to @modded-soldier-9)
+            -   **持续会话与固定账号零额度无感自动迁移**: 在粘性会话（Sticky Session）与固定优先账号（Preferred Account）选号阶段增加前置配额感知。当绑定账号的目标模型配额降至 0% 且号池存在具备正配额的健康账号时，立即原子解绑并在选号完成后原子重绑新会话，避免继续死锁复用 0% 账号导致客户端碰壁报错中断，保障多轮 Agent 编程持续顺畅。 (PR #3642, Fixes #3639, Ref #3509, Thanks to @modded-soldier-9)
+            -   **配额重置时间跨模型精准隔离**: 彻底重构 `get_quota_reset_time` 与 `fetch_and_lock_with_realtime_quota`。增加模型名称归一化精准匹配门禁，仅当目标模型实际配额耗尽 (`percentage <= 0`) 时才提取长周期重置时间；当额度充足的模型遭遇并发 429 时，坚决拒绝盗用账号内其他耗尽模型（如 Claude Opus）数十小时的重置时间，平滑回退至秒级指数退避阶梯，根除误报 503 调度受限与号池假死。 (PR #3640, Fixes #3627, Thanks to @modded-soldier-9)
+            -   **Google Imagen 3 微间隙原地 GraceRetry 与限流队列救援**: 针对生图模型上游 429 短周期重置延迟（通常约 1.17s），在多账号第 1 轮调度中引入微间隙优先原地自愈机制（`delay <= 2500ms` 原地等待重试），彻底根除 50ms 盲目快切在 300ms 内遍历打穿全池导致全军覆没的缺陷；同时在 `get_image_token` 中引入限流冷却预算救援，只要请求超时预算充足自动等待瞬态冷却后重试，生图成功率大幅提升。 (PR #3641, Fixes #3329, Fixes #3409, Thanks to @modded-soldier-9)
+            -   **Claude Cowork 深度压缩状态机与接续标记穿透加固**: 将压缩后接续免死租约滑动窗口（`COMPACTION_IMMUNITY_WINDOW_SECS`）进一步放宽调优至 90 秒，稳固覆盖慢推理思考与超长耗时 MCP 工具链，彻底消除 Double-400 假报警死循环；将接续标记扫描深度拓展至前 5 轮消息，穿透多轮 `<system-reminder>` 与环境详情块稳定捕获摘要标记，并补齐 `/compact.` 与 `/compact <args>` 命令变体。 (PR #3644, PR #3647, Ref #3576, Thanks to @modded-soldier-9, @cubelikeplayDaniel)
+            -   **Claude Code 会话用量缩放隔离与原生 95% 自动压缩探针自愈**: 统一抽离 `is_code_mode` 精准识别 Claude Code CLI 与 Desktop Code Tab；在开启 `enable_usage_scaling` 时对 Code 模式强制旁路缩放以如实反馈物理 Token 消耗，杜绝因缩放后虚假低用量麻痹客户端探针导致永远无法触碰 95% 自动压缩水位线、进而在超限后突发断连报错的问题。 (PR #3650, Fixes #867, Fixes #1066, Fixes #1079, Thanks to @cubelikeplayDaniel)
+        -   **[Gemini 思考档位别名规范化与防空转标点惰性降级] (PR #3646, PR #3649, Fixes #3629, Ref #2208, Thanks to @ThermalEng, @modded-soldier-9)**:
+            -   **Pro 系列思考档位别名规范化为上游真实 ID**: 统一复用模型兼容映射表，确保裸模型 `gemini-3.1-pro` 在 `high`、`medium` 回退或缺省路由阶段派生出的公开别名，以及显式指定的 `gemini-3.1-pro-high` 别名，均统一规范化映射至上游真实物理模型 ID `gemini-pro-agent`，彻底修复直接向上游请求 `gemini-3.1-pro-high` 导致的 `400 INVALID_ARGUMENT` 报错。 (PR #3646, Ref #2208, Thanks to @ThermalEng)
+            -   **Gemini 空轮次保底垫片降级为惰性标点**: 将通用防御层 `ensure_gemini_payload_ends_with_user` 中针对空文本/无实质内容用户轮次的保底填充文本（`TRANSIT_DEFENSE_FALLBACK_TEXT`）由口语短句 `"ok go on"` 彻底降级为中性惰性标点 `"."`。在完全满足 Google Gemini 协议 `parts` 非空校验的同时，杜绝被 AI Agent（如 Cline、Claude Code、OpenCode 等）误判为人类明确授权指令，根治人机安全确认门禁被击穿与上下文死循环缺陷。 (PR #3649, Fixes #3629, Thanks to @modded-soldier-9)
+            -   **零思考预算严格关闭上游思维链与面板软偏好特性释义**: 在进站流水线中，当用户显式配置或自适应极速压缩至 0 思考预算时，严格双向注入 `includeThoughts: false` 与 `thinkingBudget: 0`，对齐官方抓包协议规范彻底断绝思维链；并在设置面板与全 12 国语言中明晰标注 Google Gemini 上游将 thinkingBudget 视为启发式软偏好（Soft Target）之自适应特性，杜绝长 Prompt 深思场景下的误解。 (Ref #3648)
+        -   **[修复 HTTP API 验证字段丢失、静默启动支持、storage.json 缺失自愈与管理端热同步] (PR #3651, Fixes #3631, Fixes #3630, Fixes #1411, Fixes #3270, Fixes #3275, Fixes #3280, Fixes #3260, Thanks to @modded-soldier-9)**:
+            -   **HTTP / Headless API 元数据字段全量补齐**: 在 `modules/http_api.rs` 的 `AccountResponse` 中全面补充 `validation_url`、`validation_blocked*`、`priority`、`disabled*`、`proxy_disabled*` 与 `protected_models` 等全量元数据字段，彻底消除前端与第三方 API 消费者的死代码，确保外部集成与无头面板可无缝获取解封验证链接与全景状态。 (PR #3651, Fixes #3631, Thanks to @modded-soldier-9)
+            -   **账号验证封禁彻底自愈清理**: 在 `modules/account.rs` 的 `clear_validation_blocked` 中同步清空 `validation_blocked_until`、`validation_url`、`validation_blocked_reason` 并彻底重置 `quota.is_forbidden = false`，放宽清理防护判据，彻底根除手动解封后因残留脏标记导致的环形锁死问题。 (PR #3651, Fixes #3630, Thanks to @modded-soldier-9)
+            -   **开机静默启动参数全面支持**: 为 `apply_login_launch_policy` 增加 `--silent`、`--hidden`、`-s` 与 `/minimized` 等常用命令行参数检测，支持 Windows 计划任务、批处理或快捷方式传入参数时静默启动至托盘。 (PR #3651, Fixes #1411, Thanks to @modded-soldier-9)
+            -   **全新安装初次切号 storage.json 缺失自愈**: 在 `modules/device.rs` 的 `get_storage_path` 与 `write_profile` 中，当全新安装的 Antigravity IDE 尚未生成 `storage.json` 时自动递归创建目录并初始化设备指纹配置，彻底根治初次切号报 `storage_json_not_found` 错误。 (PR #3651, Fixes #3270, Thanks to @modded-soldier-9)
+            -   **Codex / ChatGPT CLI 目录双向同步兼容**: 适配 Codex 更名为 ChatGPT 后的配置路径变化，当 `.chatgpt` 与 `.codex` 目录同时或单独存在时执行双向全量同步。 (PR #3651, Fixes #3275, Thanks to @modded-soldier-9)
+            -   **管理服务 (Admin Server) 配置同步热更新**: 在 `commands/mod.rs` 的 `save_config` 中，当用户保存配置时同步热更新 `admin_server.axum_server` 的模型过滤与代理策略，确保仅运行管理后台时修改配置即刻生效。 (PR #3651, Fixes #3280, Fixes #3285, Thanks to @modded-soldier-9)
+            -   **Linux RPM 发行版安装路径补充**: 在 `modules/process.rs` 的 Linux 安装路径探测中补充 Fedora / openSUSE / RHEL 规范的 `/usr/lib64` 与 `/usr/lib` 路径。 (PR #3651, Fixes #3260, Thanks to @modded-soldier-9)
+
+
     *   **v4.9.7-beta.7 (2026-10-11)**:
         -   **[对齐 Claude Code 2.1.293 终结状态机并消除假死与截断] (PR #3634, Ref #3633, Thanks to @cubelikeplayDaniel)**:
             -   **流式预读免阻塞与官方 SSE 心跳保活**: 移除流式请求前端阻塞式 Peek，HTTP 200 建立后直接推流，并在空闲期下发官方标准 SSE ping 保活帧（`event: ping`），彻底根治下游客户端 300s/5 分钟硬超时假死。 (PR #3634, Thanks to @cubelikeplayDaniel)

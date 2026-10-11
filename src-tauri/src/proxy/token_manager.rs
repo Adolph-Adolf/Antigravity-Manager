@@ -133,7 +133,7 @@ pub struct ProxyToken {
     pub protected_models: HashSet<String>, // [NEW #621]
     pub health_score: f32,                 // [NEW] 健康分数 (0.0 - 1.0)
     pub reset_time: Option<i64>,           // [NEW] 配额刷新时间戳（用于排序优化）
-    pub weekly_reset_time: Option<i64>,    // [NEW] 周配额刷新时间戳（用于临期优先调度 EDF，防止周期重置作废配额）
+    pub weekly_reset_time: Option<i64>, // [NEW] 周配额刷新时间戳（用于临期优先调度 EDF，防止周期重置作废配额）
     pub validation_blocked: bool, // [NEW] Check for validation block (VALIDATION_REQUIRED temporary block)
     pub validation_blocked_until: i64, // [NEW] Timestamp until which the account is blocked
     pub validation_url: Option<String>, // [NEW] Validation URL (#1522)
@@ -1821,9 +1821,7 @@ impl TokenManager {
             .iter()
             .any(|t| t.model_quotas.get(normalized_target).copied().unwrap_or(0) > 0);
         if has_positive_model_quota {
-            available.retain(|t| {
-                t.model_quotas.get(normalized_target).copied().unwrap_or(0) > 0
-            });
+            available.retain(|t| t.model_quotas.get(normalized_target).copied().unwrap_or(0) > 0);
         }
 
         if available.len() == 1 {
@@ -1861,12 +1859,18 @@ impl TokenManager {
         // P2C 临期感知选择：若一候选账号存在临期配额 (<= 24h 重置且 q > 0)，优先抽中该临期账号防止配额作废
         let now_ts = chrono::Utc::now().timestamp();
         let get_imminent = |t: &ProxyToken, q: i32| -> Option<i64> {
-            if q <= 0 { return None; }
+            if q <= 0 {
+                return None;
+            }
             if let Some(w) = t.weekly_reset_time {
-                if w > now_ts && (w - now_ts) <= 86400 { return Some(w); }
+                if w > now_ts && (w - now_ts) <= 86400 {
+                    return Some(w);
+                }
             }
             if let Some(r) = t.reset_time {
-                if r > now_ts && (r - now_ts) <= 7200 { return Some(r); }
+                if r > now_ts && (r - now_ts) <= 7200 {
+                    return Some(r);
+                }
             }
             None
         };
@@ -1875,10 +1879,22 @@ impl TokenManager {
         let imm2 = get_imminent(c2, q2);
 
         let selected = match (imm1, imm2) {
-            (Some(ts1), Some(ts2)) => if ts1 <= ts2 { c1 } else { c2 },
+            (Some(ts1), Some(ts2)) => {
+                if ts1 <= ts2 {
+                    c1
+                } else {
+                    c2
+                }
+            }
             (Some(_), None) => c1,
             (None, Some(_)) => c2,
-            (None, None) => if q1 >= q2 { c1 } else { c2 },
+            (None, None) => {
+                if q1 >= q2 {
+                    c1
+                } else {
+                    c2
+                }
+            }
         };
 
         tracing::debug!(
@@ -2023,10 +2039,13 @@ impl TokenManager {
                         // 且距离请求截止时间 (deadline) 仍有充裕预算，则等待冷却时长后自动重选，
                         // 绝不直接向前端或客户端抛出 503 SERVICE_UNAVAILABLE 导致生图失败！
                         if let Some(wait_sec) =
-                            crate::proxy::handlers::common::extract_retry_after_seconds(&selection_error)
+                            crate::proxy::handlers::common::extract_retry_after_seconds(
+                                &selection_error,
+                            )
                         {
                             let wait_dur = std::time::Duration::from_secs(wait_sec.clamp(1, 10));
-                            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+                            let remaining =
+                                deadline.saturating_duration_since(tokio::time::Instant::now());
                             if remaining > wait_dur {
                                 tracing::info!(
                                     "[ImageScheduler] All accounts in transient cooldown ({}s), waiting {}s within timeout budget to rescue image request",
@@ -2301,7 +2320,7 @@ impl TokenManager {
                 }
                 (Some(_), None) => return std::cmp::Ordering::Less, // a 临期，优先消耗 a
                 (None, Some(_)) => return std::cmp::Ordering::Greater, // b 临期，优先消耗 b
-                (None, None) => {} // 皆非临期，走正常配额比对
+                (None, None) => {}                                  // 皆非临期，走正常配额比对
             }
 
             // Priority 1: 目标模型的 quota (higher is better) -> 保护低配额账号
@@ -2436,8 +2455,11 @@ impl TokenManager {
                                 <= 0;
                             let has_healthy_alternative = tokens_snapshot.iter().any(|t| {
                                 t.account_id != preferred_token.account_id
-                                    && !self.rate_limit_tracker.is_rate_limited(&t.account_id, Some(&normalized_target))
-                                    && t.model_quotas.get(&normalized_target).copied().unwrap_or(0) > 0
+                                    && !self
+                                        .rate_limit_tracker
+                                        .is_rate_limited(&t.account_id, Some(&normalized_target))
+                                    && t.model_quotas.get(&normalized_target).copied().unwrap_or(0)
+                                        > 0
                             });
 
                             if has_zero_quota && has_healthy_alternative {
@@ -2569,7 +2591,9 @@ impl TokenManager {
                         let has_healthy_alternative = tokens_snapshot.iter().any(|t| {
                             t.account_id != bound_token.account_id
                                 && !attempted.contains(&t.account_id)
-                                && !self.rate_limit_tracker.is_rate_limited(&t.account_id, Some(&normalized_target))
+                                && !self
+                                    .rate_limit_tracker
+                                    .is_rate_limited(&t.account_id, Some(&normalized_target))
                                 && t.model_quotas.get(&normalized_target).copied().unwrap_or(0) > 0
                         });
 
@@ -2644,8 +2668,15 @@ impl TokenManager {
                                 let has_healthy_alt = tokens_snapshot.iter().any(|t| {
                                     &t.account_id != account_id
                                         && !attempted.contains(&t.account_id)
-                                        && !self.rate_limit_tracker.is_rate_limited(&t.account_id, Some(&normalized_target))
-                                        && t.model_quotas.get(&normalized_target).copied().unwrap_or(0) > 0
+                                        && !self.rate_limit_tracker.is_rate_limited(
+                                            &t.account_id,
+                                            Some(&normalized_target),
+                                        )
+                                        && t.model_quotas
+                                            .get(&normalized_target)
+                                            .copied()
+                                            .unwrap_or(0)
+                                            > 0
                                 });
 
                                 if last_zero_quota && has_healthy_alt {
@@ -3455,8 +3486,9 @@ impl TokenManager {
                 .iter()
                 .find(|m| {
                     let name = m.get("name").and_then(|v| v.as_str()).unwrap_or("");
-                    let norm_name = crate::proxy::common::model_mapping::normalize_to_standard_id(name)
-                        .unwrap_or_else(|| name.to_string());
+                    let norm_name =
+                        crate::proxy::common::model_mapping::normalize_to_standard_id(name)
+                            .unwrap_or_else(|| name.to_string());
                     norm_name == norm_target || name == target
                 })
                 .and_then(|m| {
@@ -3475,9 +3507,9 @@ impl TokenManager {
         } else {
             // 全账号级：仅当所有模型均为 0% 时才提取最早 reset_time
             let all_zero = !models.is_empty()
-                && models.iter().all(|m| {
-                    m.get("percentage").and_then(|v| v.as_i64()).unwrap_or(100) <= 0
-                });
+                && models
+                    .iter()
+                    .all(|m| m.get("percentage").and_then(|v| v.as_i64()).unwrap_or(100) <= 0);
 
             if all_zero {
                 models
@@ -3518,7 +3550,9 @@ impl TokenManager {
             true
         };
 
-        if let Some(reset_time_str) = self.get_quota_reset_time(account_id, model_to_lock.as_deref()) {
+        if let Some(reset_time_str) =
+            self.get_quota_reset_time(account_id, model_to_lock.as_deref())
+        {
             tracing::info!(
                 "找到账号 {} [模型 {:?}] 的配额刷新时间: {} (cap_to_max: {})",
                 account_id,
@@ -3588,21 +3622,25 @@ impl TokenManager {
         match crate::modules::quota::fetch_quota(&access_token, email, Some(&account_id)).await {
             Ok((quota_data, _project_id)) => {
                 // 3. 从最新配额中提取匹配模型的 reset_time
-                let normalized_model = model.as_deref().and_then(|m| {
-                    crate::proxy::common::model_mapping::normalize_to_standard_id(m)
-                });
+                let normalized_model = model
+                    .as_deref()
+                    .and_then(|m| crate::proxy::common::model_mapping::normalize_to_standard_id(m));
                 let model_to_lock = normalized_model.or(model);
 
                 let matched_reset = if let Some(ref target) = model_to_lock {
-                    let norm_target = crate::proxy::common::model_mapping::normalize_to_standard_id(target)
-                        .unwrap_or_else(|| target.to_string());
+                    let norm_target =
+                        crate::proxy::common::model_mapping::normalize_to_standard_id(target)
+                            .unwrap_or_else(|| target.to_string());
 
                     // 精准查找当前报错的模型
                     quota_data
                         .models
                         .iter()
                         .find(|m| {
-                            let norm_m = crate::proxy::common::model_mapping::normalize_to_standard_id(&m.name)
+                            let norm_m =
+                                crate::proxy::common::model_mapping::normalize_to_standard_id(
+                                    &m.name,
+                                )
                                 .unwrap_or_else(|| m.name.clone());
                             norm_m == norm_target || m.name == *target
                         })
@@ -4379,7 +4417,9 @@ impl TokenManager {
                             if !reset_str.is_empty() {
                                 if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(reset_str) {
                                     let ts = dt.timestamp();
-                                    if earliest_weekly_ts.is_none() || ts < earliest_weekly_ts.unwrap() {
+                                    if earliest_weekly_ts.is_none()
+                                        || ts < earliest_weekly_ts.unwrap()
+                                    {
                                         earliest_weekly_ts = Some(ts);
                                     }
                                 }
@@ -6945,7 +6985,10 @@ mod tests {
         });
 
         let weekly_ts = manager.extract_weekly_reset_time(&account_json);
-        assert!(weekly_ts.is_some(), "必须成功从 7d/weekly 桶中提取周配额刷新时间戳");
+        assert!(
+            weekly_ts.is_some(),
+            "必须成功从 7d/weekly 桶中提取周配额刷新时间戳"
+        );
         let dt = chrono::DateTime::parse_from_rfc3339("2026-10-14T03:00:00Z").unwrap();
         assert_eq!(weekly_ts.unwrap(), dt.timestamp());
     }
@@ -7126,7 +7169,9 @@ mod tests {
         manager.tokens.insert(acc_alt_id.to_string(), token2);
 
         // 设置固定优先账号为 acc_pref_id
-        manager.set_preferred_account(Some(acc_pref_id.to_string())).await;
+        manager
+            .set_preferred_account(Some(acc_pref_id.to_string()))
+            .await;
 
         // 获取 Token：优先账号目标模型为 0% 且存在具备 80% 的替代账号时，
         // 绝不得死磕 0% 账号导致 429，必须无感自动回退至池中可用账号 (Fixes #3639)
@@ -7134,14 +7179,17 @@ mod tests {
         let (_token, _project_id, email, selected_id, _wait) = manager
             .get_token_filtered("chat", false, None, target_model, &excluded)
             .await
-            .expect("Preferred account with 0% quota must seamlessly fallback to available account");
+            .expect(
+                "Preferred account with 0% quota must seamlessly fallback to available account",
+            );
 
         assert_eq!(selected_id, acc_alt_id, "必须自动选择具备额度的备选账号");
         assert_eq!(email, "alt@test.com");
     }
 
     #[tokio::test]
-    async fn test_edf_sorting_prioritizes_expiring_weekly_account_over_higher_quota_distant_reset() {
+    async fn test_edf_sorting_prioritizes_expiring_weekly_account_over_higher_quota_distant_reset()
+    {
         let temp_dir = tempfile::tempdir().unwrap();
         let manager = TokenManager::new(temp_dir.path().to_path_buf());
         let now_ts = chrono::Utc::now().timestamp();
@@ -7167,8 +7215,16 @@ mod tests {
         token_b.model_quotas = quotas_b;
         token_b.weekly_reset_time = Some(now_ts + 432_000); // 5 天后
 
-        std::fs::write(temp_dir.path().join("acc_expiring.json"), r#"{"disabled":false}"#).unwrap();
-        std::fs::write(temp_dir.path().join("acc_distant.json"), r#"{"disabled":false}"#).unwrap();
+        std::fs::write(
+            temp_dir.path().join("acc_expiring.json"),
+            r#"{"disabled":false}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            temp_dir.path().join("acc_distant.json"),
+            r#"{"disabled":false}"#,
+        )
+        .unwrap();
 
         token_a.account_path = temp_dir.path().join("acc_expiring.json");
         token_b.account_path = temp_dir.path().join("acc_distant.json");
@@ -7218,8 +7274,16 @@ mod tests {
         token_b.model_quotas = quotas_b;
         token_b.weekly_reset_time = Some(now_ts + 28800); // 8 小时后
 
-        std::fs::write(temp_dir.path().join("acc_sooner.json"), r#"{"disabled":false}"#).unwrap();
-        std::fs::write(temp_dir.path().join("acc_later.json"), r#"{"disabled":false}"#).unwrap();
+        std::fs::write(
+            temp_dir.path().join("acc_sooner.json"),
+            r#"{"disabled":false}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            temp_dir.path().join("acc_later.json"),
+            r#"{"disabled":false}"#,
+        )
+        .unwrap();
 
         token_a.account_path = temp_dir.path().join("acc_sooner.json");
         token_b.account_path = temp_dir.path().join("acc_later.json");
@@ -7252,7 +7316,8 @@ mod tests {
         // 账号 A: 40% 配额，周配额在 4 天后重置 (非临期)
         let mut quotas_a = HashMap::new();
         quotas_a.insert(norm_target.clone(), 40);
-        let mut token_a = create_test_token("low_distant@test.com", Some("PRO"), 1.0, None, Some(40));
+        let mut token_a =
+            create_test_token("low_distant@test.com", Some("PRO"), 1.0, None, Some(40));
         token_a.account_id = "acc_low".to_string();
         token_a.model_quotas = quotas_a;
         token_a.weekly_reset_time = Some(now_ts + 345_600); // 4 天后
@@ -7260,13 +7325,22 @@ mod tests {
         // 账号 B: 95% 配额，周配额在 6 天后重置 (非临期)
         let mut quotas_b = HashMap::new();
         quotas_b.insert(norm_target, 95);
-        let mut token_b = create_test_token("high_distant@test.com", Some("PRO"), 1.0, None, Some(95));
+        let mut token_b =
+            create_test_token("high_distant@test.com", Some("PRO"), 1.0, None, Some(95));
         token_b.account_id = "acc_high".to_string();
         token_b.model_quotas = quotas_b;
         token_b.weekly_reset_time = Some(now_ts + 518_400); // 6 天后
 
-        std::fs::write(temp_dir.path().join("acc_low.json"), r#"{"disabled":false}"#).unwrap();
-        std::fs::write(temp_dir.path().join("acc_high.json"), r#"{"disabled":false}"#).unwrap();
+        std::fs::write(
+            temp_dir.path().join("acc_low.json"),
+            r#"{"disabled":false}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            temp_dir.path().join("acc_high.json"),
+            r#"{"disabled":false}"#,
+        )
+        .unwrap();
 
         token_a.account_path = temp_dir.path().join("acc_low.json");
         token_b.account_path = temp_dir.path().join("acc_high.json");
@@ -7281,7 +7355,10 @@ mod tests {
             .await
             .expect("Token acquisition should succeed");
 
-        assert_eq!(selected_id, "acc_high", "非临期时应保持高配额优先以保护低配额账号");
+        assert_eq!(
+            selected_id, "acc_high",
+            "非临期时应保持高配额优先以保护低配额账号"
+        );
         assert_eq!(email, "high_distant@test.com");
     }
 
@@ -7299,7 +7376,8 @@ mod tests {
         // 账号 A: 0% 配额，即便 1 小时后重置，也绝不能因为临期被选出（没有额度）
         let mut quotas_a = HashMap::new();
         quotas_a.insert(norm_target.clone(), 0);
-        let mut token_a = create_test_token("zero_expiring@test.com", Some("PRO"), 1.0, None, Some(0));
+        let mut token_a =
+            create_test_token("zero_expiring@test.com", Some("PRO"), 1.0, None, Some(0));
         token_a.account_id = "acc_zero".to_string();
         token_a.model_quotas = quotas_a;
         token_a.weekly_reset_time = Some(now_ts + 3600); // 1 小时后
@@ -7312,8 +7390,16 @@ mod tests {
         token_b.model_quotas = quotas_b;
         token_b.weekly_reset_time = Some(now_ts + 432_000); // 5 天后
 
-        std::fs::write(temp_dir.path().join("acc_zero.json"), r#"{"disabled":false}"#).unwrap();
-        std::fs::write(temp_dir.path().join("acc_has.json"), r#"{"disabled":false}"#).unwrap();
+        std::fs::write(
+            temp_dir.path().join("acc_zero.json"),
+            r#"{"disabled":false}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            temp_dir.path().join("acc_has.json"),
+            r#"{"disabled":false}"#,
+        )
+        .unwrap();
 
         token_a.account_path = temp_dir.path().join("acc_zero.json");
         token_b.account_path = temp_dir.path().join("acc_has.json");
@@ -7327,7 +7413,10 @@ mod tests {
             .await
             .expect("Token acquisition should succeed");
 
-        assert_eq!(selected_id, "acc_has", "0% 配额账号即便临期也绝不得被提权选中");
+        assert_eq!(
+            selected_id, "acc_has",
+            "0% 配额账号即便临期也绝不得被提权选中"
+        );
         assert_eq!(email, "has_quota@test.com");
     }
 }
