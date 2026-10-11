@@ -4357,7 +4357,11 @@ impl TokenManager {
             if let Some(buckets) = group.get("buckets").and_then(|b| b.as_array()) {
                 for bucket in buckets {
                     let window = bucket.get("window").and_then(|w| w.as_str()).unwrap_or("");
-                    let bucket_id = bucket.get("bucket_id").and_then(|b| b.as_str()).unwrap_or("");
+                    let bucket_id = bucket
+                        .get("bucket_id")
+                        .or_else(|| bucket.get("bucketId"))
+                        .and_then(|b| b.as_str())
+                        .unwrap_or("");
                     let win_lower = window.to_lowercase();
                     let bid_lower = bucket_id.to_lowercase();
 
@@ -4367,7 +4371,11 @@ impl TokenManager {
                         || bid_lower.contains("7d");
 
                     if is_weekly {
-                        if let Some(reset_str) = bucket.get("reset_time").and_then(|r| r.as_str()) {
+                        let reset_val = bucket
+                            .get("reset_time")
+                            .or_else(|| bucket.get("resetTime"))
+                            .and_then(|r| r.as_str());
+                        if let Some(reset_str) = reset_val {
                             if !reset_str.is_empty() {
                                 if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(reset_str) {
                                     let ts = dt.timestamp();
@@ -7139,10 +7147,13 @@ mod tests {
         let now_ts = chrono::Utc::now().timestamp();
 
         let target_model = "gemini-3.8-flash-high";
+        let norm_target =
+            crate::proxy::common::model_mapping::normalize_to_standard_id(target_model)
+                .unwrap_or_else(|| target_model.to_string());
 
         // 账号 A: 40% 配额，周配额在 2 小时后重置 (临期，不尽快消耗该配额就会被 Google 作废清零)
         let mut quotas_a = HashMap::new();
-        quotas_a.insert(target_model.to_string(), 40);
+        quotas_a.insert(norm_target.clone(), 40);
         let mut token_a = create_test_token("expiring@test.com", Some("PRO"), 1.0, None, Some(40));
         token_a.account_id = "acc_expiring".to_string();
         token_a.model_quotas = quotas_a;
@@ -7150,7 +7161,7 @@ mod tests {
 
         // 账号 B: 95% 配额，周配额在 5 天后重置 (非临期，整周还有很多时间可用)
         let mut quotas_b = HashMap::new();
-        quotas_b.insert(target_model.to_string(), 95);
+        quotas_b.insert(norm_target, 95);
         let mut token_b = create_test_token("distant@test.com", Some("PRO"), 1.0, None, Some(95));
         token_b.account_id = "acc_distant".to_string();
         token_b.model_quotas = quotas_b;
@@ -7187,10 +7198,13 @@ mod tests {
         let now_ts = chrono::Utc::now().timestamp();
 
         let target_model = "gemini-3.8-flash-high";
+        let norm_target =
+            crate::proxy::common::model_mapping::normalize_to_standard_id(target_model)
+                .unwrap_or_else(|| target_model.to_string());
 
         // 账号 A: 40% 配额，周配额在 2 小时后重置
         let mut quotas_a = HashMap::new();
-        quotas_a.insert(target_model.to_string(), 40);
+        quotas_a.insert(norm_target.clone(), 40);
         let mut token_a = create_test_token("sooner@test.com", Some("PRO"), 1.0, None, Some(40));
         token_a.account_id = "acc_sooner".to_string();
         token_a.model_quotas = quotas_a;
@@ -7198,7 +7212,7 @@ mod tests {
 
         // 账号 B: 60% 配额，周配额在 8 小时后重置
         let mut quotas_b = HashMap::new();
-        quotas_b.insert(target_model.to_string(), 60);
+        quotas_b.insert(norm_target, 60);
         let mut token_b = create_test_token("later@test.com", Some("PRO"), 1.0, None, Some(60));
         token_b.account_id = "acc_later".to_string();
         token_b.model_quotas = quotas_b;
@@ -7231,10 +7245,13 @@ mod tests {
         let now_ts = chrono::Utc::now().timestamp();
 
         let target_model = "gemini-3.8-flash-high";
+        let norm_target =
+            crate::proxy::common::model_mapping::normalize_to_standard_id(target_model)
+                .unwrap_or_else(|| target_model.to_string());
 
         // 账号 A: 40% 配额，周配额在 4 天后重置 (非临期)
         let mut quotas_a = HashMap::new();
-        quotas_a.insert(target_model.to_string(), 40);
+        quotas_a.insert(norm_target.clone(), 40);
         let mut token_a = create_test_token("low_distant@test.com", Some("PRO"), 1.0, None, Some(40));
         token_a.account_id = "acc_low".to_string();
         token_a.model_quotas = quotas_a;
@@ -7242,7 +7259,7 @@ mod tests {
 
         // 账号 B: 95% 配额，周配额在 6 天后重置 (非临期)
         let mut quotas_b = HashMap::new();
-        quotas_b.insert(target_model.to_string(), 95);
+        quotas_b.insert(norm_target, 95);
         let mut token_b = create_test_token("high_distant@test.com", Some("PRO"), 1.0, None, Some(95));
         token_b.account_id = "acc_high".to_string();
         token_b.model_quotas = quotas_b;
@@ -7275,10 +7292,13 @@ mod tests {
         let now_ts = chrono::Utc::now().timestamp();
 
         let target_model = "gemini-3.8-flash-high";
+        let norm_target =
+            crate::proxy::common::model_mapping::normalize_to_standard_id(target_model)
+                .unwrap_or_else(|| target_model.to_string());
 
         // 账号 A: 0% 配额，即便 1 小时后重置，也绝不能因为临期被选出（没有额度）
         let mut quotas_a = HashMap::new();
-        quotas_a.insert(target_model.to_string(), 0);
+        quotas_a.insert(norm_target.clone(), 0);
         let mut token_a = create_test_token("zero_expiring@test.com", Some("PRO"), 1.0, None, Some(0));
         token_a.account_id = "acc_zero".to_string();
         token_a.model_quotas = quotas_a;
@@ -7286,7 +7306,7 @@ mod tests {
 
         // 账号 B: 80% 配额，周配额在 5 天后重置
         let mut quotas_b = HashMap::new();
-        quotas_b.insert(target_model.to_string(), 80);
+        quotas_b.insert(norm_target, 80);
         let mut token_b = create_test_token("has_quota@test.com", Some("PRO"), 1.0, None, Some(80));
         token_b.account_id = "acc_has".to_string();
         token_b.model_quotas = quotas_b;

@@ -4563,24 +4563,26 @@ mod warmup_tests {
 
     #[test]
     fn test_detect_post_compaction_continuation_with_preceding_reminders_and_extended_scan() {
+        use crate::proxy::mappers::claude::models::{Message, MessageContent};
+
         // 构造包含多轮前置 system-reminder 与环境详情的接续请求 (第 4 条为包含 <summary> 的接续轮)
         let req = ClaudeRequest {
             messages: vec![
-                ClaudeMessage {
+                Message {
                     role: "user".to_string(),
                     content: MessageContent::String("<system-reminder>Token limit warning</system-reminder>".to_string()),
                 },
-                ClaudeMessage {
+                Message {
                     role: "user".to_string(),
                     content: MessageContent::String("<environment_details>cwd: /project</environment_details>".to_string()),
                 },
-                ClaudeMessage {
+                Message {
                     role: "user".to_string(),
                     content: MessageContent::String("Let's continue working on the task.".to_string()),
                 },
-                ClaudeMessage {
+                Message {
                     role: "user".to_string(),
-                    content: MessageContent::String("Here is the summary of what we did:\n<summary>\n1. Initialized repo\n2. Fixed issue #3639\n</summary>".to_string()),
+                    content: MessageContent::String("Here is the summary of what we did from previous conversation:\n<summary>\n1. Initialized repo\n2. Fixed issue #3639\n</summary>".to_string()),
                 },
             ],
             ..Default::default()
@@ -4595,6 +4597,8 @@ mod warmup_tests {
 
     #[test]
     fn test_is_manual_compact_command_variants() {
+        use crate::proxy::mappers::claude::models::{Message, MessageContent};
+
         for cmd in [
             "./compact",
             ".\\compact",
@@ -4605,7 +4609,7 @@ mod warmup_tests {
             "/compact please",
         ] {
             let req = ClaudeRequest {
-                messages: vec![ClaudeMessage {
+                messages: vec![Message {
                     role: "user".to_string(),
                     content: MessageContent::String(cmd.to_string()),
                 }],
