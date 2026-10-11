@@ -3,6 +3,23 @@
 > 完整版本历史记录。返回项目主页请查看 [README_ZH.md](README_ZH.md) | [English Changelog](CHANGELOG_EN.md)。
 
 *   **版本演进**:
+    *   **v4.9.7-beta.7 (2026-10-11)**:
+        -   **[对齐 Claude Code 2.1.293 终结状态机并消除假死与截断] (PR #3634, Ref #3633, Thanks to @cubelikeplayDaniel)**:
+            -   **流式预读免阻塞与官方 SSE 心跳保活**: 移除流式请求前端阻塞式 Peek，HTTP 200 建立后直接推流，并在空闲期下发官方标准 SSE ping 保活帧（`event: ping`），彻底根治下游客户端 300s/5 分钟硬超时假死。 (PR #3634, Thanks to @cubelikeplayDaniel)
+            -   **保全工具回执轮次闭环与上下文折叠**: 针对 Gemini 目标角色归一化阶段，将伴随的 `<system-reminder>` 等系统注入提醒文本无缝折叠入前序 `functionResponse` 的输出中，杜绝在回执后产生悬挂的独立 user 轮次，避免打断 Gemini 工具调用状态机。 (PR #3634, Thanks to @cubelikeplayDaniel)
+            -   **终结状态机感知与即时断流**: 引入 `is_terminal()` 感知 `message_stop`，发出终结帧后毫秒级关闭下游连接，严禁上游越界多余数据帧投毒；彻底移除空回复伪造与断流伪造正常收尾，异常如实向底层透传以激活客户端原生自动重试。 (PR #3634, Thanks to @cubelikeplayDaniel)
+            -   **规范化错误码与收敛 Retry-After**: 将 529 规范映射为 429、403 映射为 503，杜绝客户端误触发长达 10~30 分钟过载冷冻或退出至登录页；将 Retry-After 安全收敛至 `[1, 12]` 秒内，彻底解决超大等待时间冻结 CLI 的问题。 (PR #3634, Thanks to @cubelikeplayDaniel)
+            -   **原生经典版独占支持语言服务热切号**: 将热切号机制精准限定于原生经典版（Standalone >= 2.0.0），检测到运行中经典版时优先执行语言服务热切号（先写凭据 → 终止 `language_server` 子进程 → 补写权威凭据），利用宿主守护进程原地重建子进程重载新凭据，彻底杜绝主窗口关闭重启、消除窗口闪烁并完整保留未保存缓冲区与终端会话。 (Fixes #3637, Thanks to @rassvetpublic-spec)
+            -   **IDE 款与异常场景平滑回退安全机制 (Risky Path Replacement)**: IDE 款因强依赖 Extension Host 内存上下文与 SQLite (state.vscdb) 单写者锁，保持完整重启以防状态残缺；同时原生版若未检测到语言服务子进程、终止失败或重建超时时，自动平滑回退到原本的完整重启机制，确保零残状态。 (Fixes #3637)
+        -   **[Token 统计看板偏好记忆、时间粒度细分、金额维度与热力图体验升级] (Ref PR #3638, Thanks to @zepeng-jin)**:
+            -   **看板偏好状态持久化**: 通过 `localStorage` 自动记忆用户的看板偏好设置（看板模式、时间粒度、图表类型、分组维度与指标选择），页面刷新或切回时自适应还原。 (Ref PR #3638, Thanks to @zepeng-jin)
+            -   **时间统计范围细化**: 新增自然周 (Weekly) 聚合范围（过去 12 周，以 `Wxx` 标示横坐标），并规范 Hourly（24 小时）、Daily（14 天）与 All（全量历史）时间尺度。 (Ref PR #3638, Thanks to @zepeng-jin)
+            -   **金额维度与热力图体验调优**: 趋势图新增 Token 吞吐与预估金额 ($ USD) 动态切换，热力图与排行榜同步增加金额概览；热力图网格格子放大至 16px、间距扩展至 5px，提升交互与可读性。 (Ref PR #3638, Thanks to @zepeng-jin)
+        -   **[全站核心页面自洽入场动效与卡片微交互触觉反馈] (PR #3636, Thanks to @cubelikeplayDaniel)**:
+            -   **全站核心页面自洽平滑入场**: 解耦全局 Router 模式，在仪表盘、账号管理、Token 统计、网关中转、设置、安全及实时监控等 7 大核心页面应用轻量自洽入场动效，根治路由跳变重排闪烁与白屏。 (PR #3636, Thanks to @cubelikeplayDaniel)
+            -   **滚动视口与 GPU 硬件加速解耦**: 保持原生流畅滚动条计算，为内层动效容器配置硬件加速合成，杜绝页面切换 Layout Thrashing。 (PR #3636, Thanks to @cubelikeplayDaniel)
+            -   **卡片与按钮微交互触觉反馈**: 统一卡片 hover 微浮动与操作按钮 tap 触觉缩放，图表标记规避 SVG 补间计算争抢动画主线程。 (PR #3636, Thanks to @cubelikeplayDaniel)
+
     *   **v4.9.7-beta.6 (2026-10-09)**:
         -   **[403 验证封禁过期解封与账号接口透出验证链接] (PR #3632, Fixes #3630, Fixes #3631, Thanks to @zhouweirun)**:
             -   **断开配额刷新 403 验证封禁自锁死循环**: 修复批量刷新配额逻辑（`refresh_all_quotas_logic`）跳过所有被封禁账号导致封禁过期后无法重新探测的环形依赖；当账号验证封禁已过冷却期后放行探测刷新，并在过期清理时同步重置 `quota.is_forbidden`。 (Fixes #3630, Thanks to @zhouweirun)
