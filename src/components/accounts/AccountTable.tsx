@@ -582,26 +582,14 @@ function AccountRowContent({
                             {t('accounts.view_error')}
                         </button>
                     </div>
-                ) : (
-                    <div className={cn(
-                        "grid gap-x-2 gap-y-1 py-0",
-                        (quotaWindow === 'weekly' && weeklyItems.length > 0)
-                            ? (weeklyItems.length === 1 ? "grid-cols-1" : "grid-cols-2")
-                            : (displayModels.length === 1 ? "grid-cols-1" : "grid-cols-2")
-                    )}>
-                        {quotaWindow === 'weekly' && weeklyItems.length > 0 ? (
-                            weeklyItems.map((item) => (
-                                <QuotaItem
-                                    key={item.id}
-                                    label={item.label}
-                                    percentage={item.percentage}
-                                    resetTime={item.resetTime}
-                                    weeklyTokens={item.cycleTokens ?? null}
-                                    Icon={item.Icon}
-                                />
-                            ))
-                        ) : (
-                            displayModels.map((model) => {
+                ) : quotaWindow === 'weekly' && weeklyItems.length > 0 ? (
+                    <div className="flex flex-col gap-1 py-0">
+                        {/* 上：5H 滚动配额（与 5H 视图一致） */}
+                        <div className={cn(
+                            "grid gap-x-2 gap-y-1",
+                            (displayModels.length === 1 ? "grid-cols-1" : "grid-cols-2")
+                        )}>
+                            {displayModels.map((model) => {
                                 const modelData = model.data;
                                 const display = getModelQuotaDisplay(model.id, modelData, account.quota?.quota_groups);
 
@@ -615,8 +603,46 @@ function AccountRowContent({
                                         Icon={MODEL_CONFIG[model.id]?.Icon || Bot}
                                     />
                                 );
-                            })
-                        )}
+                            })}
+                        </div>
+                        {/* 下：7天周配额 */}
+                        <div className={cn(
+                            "grid gap-x-2 gap-y-1 border-t border-blue-100 dark:border-blue-900/30 pt-1",
+                            (weeklyItems.length === 1 ? "grid-cols-1" : "grid-cols-2")
+                        )}>
+                            {weeklyItems.map((item) => (
+                                <QuotaItem
+                                    key={item.id}
+                                    label={item.label}
+                                    percentage={item.percentage}
+                                    resetTime={item.resetTime}
+                                    weeklyTokens={item.cycleTokens ?? null}
+                                    Icon={item.Icon}
+                                    className="border-blue-200/60 dark:border-blue-800/40"
+                                />
+                            ))}
+                        </div>
+                    </div>
+                ) : (
+                    <div className={cn(
+                        "grid gap-x-2 gap-y-1 py-0",
+                        (displayModels.length === 1 ? "grid-cols-1" : "grid-cols-2")
+                    )}>
+                        {displayModels.map((model) => {
+                            const modelData = model.data;
+                            const display = getModelQuotaDisplay(model.id, modelData, account.quota?.quota_groups);
+
+                            return (
+                                <QuotaItem
+                                    key={model.id}
+                                    label={model.label}
+                                    {...display}
+                                    isProtected={Boolean(config?.quota_protection?.enabled && isModelProtected(account.protected_models, model.protectedKey))}
+                                    liveLimit={getLiveLimitForModel(account, model.id, model.protectedKey)}
+                                    Icon={MODEL_CONFIG[model.id]?.Icon || Bot}
+                                />
+                            );
+                        })}
                     </div>
                 )}
             </td>

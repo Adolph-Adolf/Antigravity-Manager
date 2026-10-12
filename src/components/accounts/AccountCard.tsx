@@ -294,21 +294,11 @@ function AccountCard({ account, selected, onSelect, isCurrent: propIsCurrent, is
                             {t('accounts.view_error')}
                         </button>
                     </div>
-                ) : (
-                    <div className="grid grid-cols-1 gap-2 content-start">
-                        {quotaWindow === 'weekly' && weeklyItems.length > 0 ? (
-                            weeklyItems.map((item) => (
-                                <QuotaItem
-                                    key={item.id}
-                                    label={item.label}
-                                    percentage={item.percentage}
-                                    resetTime={item.resetTime}
-                                    weeklyTokens={item.cycleTokens ?? null}
-                                    Icon={item.Icon}
-                                />
-                            ))
-                        ) : (
-                            displayModels.map((model) => (
+                ) : quotaWindow === 'weekly' && weeklyItems.length > 0 ? (
+                    <div className="flex flex-col gap-2 content-start">
+                        {/* 上：5H 滚动配额（与 5H 视图一致） */}
+                        <div className="grid grid-cols-1 gap-2 content-start">
+                            {displayModels.map((model) => (
                                 <QuotaItem
                                     key={model.id}
                                     label={model.label}
@@ -317,8 +307,35 @@ function AccountCard({ account, selected, onSelect, isCurrent: propIsCurrent, is
                                     liveLimit={getLiveLimitForModel(account, model.id, model.protectedKey)}
                                     Icon={model.Icon}
                                 />
-                            ))
-                        )}
+                            ))}
+                        </div>
+                        {/* 下：7天周配额 */}
+                        <div className="grid grid-cols-1 gap-2 content-start border-t border-blue-100 dark:border-blue-900/30 pt-2">
+                            {weeklyItems.map((item) => (
+                                <QuotaItem
+                                    key={item.id}
+                                    label={item.label}
+                                    percentage={item.percentage}
+                                    resetTime={item.resetTime}
+                                    weeklyTokens={item.cycleTokens ?? null}
+                                    Icon={item.Icon}
+                                    className="border-blue-200/60 dark:border-blue-800/40"
+                                />
+                            ))}
+                        </div>
+                    </div>
+                ) : (
+                    <div className="grid grid-cols-1 gap-2 content-start">
+                        {displayModels.map((model) => (
+                            <QuotaItem
+                                key={model.id}
+                                label={model.label}
+                                {...getModelQuotaDisplay(model.id, model.data, account.quota?.quota_groups)}
+                                isProtected={isModelProtected(model.protectedKey)}
+                                liveLimit={getLiveLimitForModel(account, model.id, model.protectedKey)}
+                                Icon={model.Icon}
+                            />
+                        ))}
                     </div>
                 )}
             </div>
