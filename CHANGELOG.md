@@ -3,6 +3,27 @@
 > 完整版本历史记录。返回项目主页请查看 [README_ZH.md](README_ZH.md) | [English Changelog](CHANGELOG_EN.md)。
 
 *   **版本演进**:
+    *   **v4.9.7-beta.10 (2026-10-13)**:
+        -   **[收紧内部预热端点为仅限本机回环访问] (PR #3660, Fixes #3659, Thanks to @Quirrel-zh)**:
+            -   **严格限制 TCP 回环来源访问**: 在 `ip_filter.rs` 中新增 `is_direct_loopback`，仅依据底层 TCP 对端地址（`ConnectInfo`，完整适配 IPv4、IPv6 与 IPv4 映射 IPv6 回环地址）判定是否为本机回环，坚决不读取易被外部伪造的 `X-Forwarded-For` 与 `X-Real-IP` 请求头。 (PR #3660, Fixes #3659, Thanks to @Quirrel-zh)
+            -   **非回环与鉴权关闭状态强阻断**: 在 `auth.rs` 中将内部端点校验提升至任何鉴权模式判断之前。无论系统全局代理鉴权是否开启（包括 `auth_mode = Off` 模式），或外部请求是否携带普通 API Key / User Token，只要是非本机回环发往 `/internal/*` 的调用，一律直接拒绝拦截（`403 Forbidden`）；并收紧代理停服状态下的放行规则，根治局域网/公网暴露时无凭证探测、任意邮箱预热上游配额盗刷与账号误封禁隐患。 (Ref #3659, PR #3660)
+        -   **[全局共享端点健康状态并收敛 loadCodeAssist 与配额查询超时] (PR #3657, Fixes #3635, Ref #3525, Thanks to @cubelikeplayDaniel)**:
+            -   **跨模块端点健康全局记忆与主机名归一化**: 在 `upstream/client.rs` 中引入全局单例 `get_global_endpoint_health()` 与 `extract_endpoint_host`，以主机名（Host）为粒度对齐不同 API 路径的健康状态。主聊天网关、项目解析（`loadCodeAssist`）与后台配额查询（`fetchAvailableModels`、`retrieveUserQuotaSummary`）全面共享端点健康记忆，任一模块发现故障，所有模块立即动态重排候选端点优先路由至健康的 Prod 节点，彻底杜绝跨模块在死端点上重复踩坑。 (PR #3657, Fixes #3635, Ref #3525, Thanks to @cubelikeplayDaniel)
+            -   **单端点请求超时紧凑收敛与连接池防断流**: 为 `project_resolver::fetch_project_id` 引入 3s 单点超时，为 `quota` 各接口引入 5s 单点超时，彻底消除级联等待超限导致的项目 ID 降级与负缓存；并在 `http.rs` 与 `proxy_pool.rs` 中统一收敛 `connect_timeout(5s)` 与 `pool_idle_timeout(45s)`，杜绝 Google GFE 空闲断流引发的死连接复用异常。 (PR #3657, Thanks to @cubelikeplayDaniel)
+        -   **[账号分组配额重构与详情视图多维体验重塑]**:
+            -   **配额分组统一聚合与卡片视图重塑**: 对齐 Google Antigravity 原生配额机制，全面废弃按单一模型分散展示配额的旧模式，重构为按「Gemini 模型」与「Claude & GPT 模型」两大核心分组展示。在首页仪表盘「当前账号」卡片、账号管理卡片、表格与拖拽列表中统一聚合实时 5H 滚动配额与 7 天周配额进度条，动态显示刷新倒计时与本周期 Token 消耗，支持短板压制与耗尽状态精准提示。
+            -   **配额详情弹窗精致度重塑与 i18n 异常修复**: 彻底重构「配额详情（`AccountDetailsDialog`）」弹窗。修复思考预算字段因 i18n 键嵌套对象导致的显示错误；优化账号优先级设置交互布局；为各具体模型引入带平滑色彩过渡的进度条、模型专属高亮图标与自然语言重置时间倒计时。
+            -   **状态标签互斥去重**: 优化账号状态徽章展示逻辑。当账号因 Token 失效等原因触发完全「已禁用」时，自动折叠并隐藏次级的「反代已禁用」标签，杜绝冗余标签并排挤占界面。
+            -   **全 12 种多国语言本地化完备支持**: 全量补充并同步配额分组名称、周配额压制提示、周期 Token 统计与详情弹窗字段至全部 12 种语言本地化文件（含简繁中文、英语、日语、韩语、西语、俄语、葡语、土耳其语、越南语、阿拉伯语与缅甸语）。
+        -   **[流量日志多维指标增强与自适应体验]**:
+            -   **耗时独立列与首字耗时 (TTFT) 展示**: 流量日志表格中将耗时独立成列，并新增首字耗时（TTFT）精确指标与缓存命中状态展示，直观洞察流式首包与链路延迟。
+            -   **请求模型与真实物理模型分层展示**: 模型列清晰呈现客户端「请求模型」与调度实际使用的「物理模型」，支持透明追溯上游物理执行版本。
+            -   **列宽拖拽交互修复与自适应对齐**: 修复列宽拖拽手势反向问题，全面支持平滑拉拽与响应式宽度自适应。
+            -   **多国语言全量同步**: 全量补充并补齐流量日志新表头、耗时/TTFT、缓存与模型 Tooltip 等全部 12 种语言本地化文案。
+        -   **[仪表盘深色主题重塑与对偶反转 Hero 卡片]**:
+            -   **深色模式高对比度与空间悬浮感重塑**: 重构暗色底座架构，拉开卡片与背景明度差，状态徽章升级为晶莹通透发光胶囊，消除扁平沉闷感。
+            -   **账号资产卡片对偶反转设计 (Inverted Hero Card)**: 首张「账号底座资产」卡片在浅色模式下为沉稳黑卡，在深色模式下对称反转为明亮白金反色卡，完美对偶并确立全场首卡视觉焦点。
+
     *   **v4.9.7-beta.9 (2026-10-13)**:
         -   **[修复安全分类校验过滤、Claude工具调用哨兵注入、shell工具别名对齐与Pro模型限额截断] (PR #3652, Fixes #3195, Fixes #3202, Fixes #3229, Fixes #3224, Fixes #3215, Thanks to @modded-soldier-9)**:
             -   **Claude 模型工具调用签名自愈 (Fixes #3202, Fixes #3229)**: 移除出站门禁（Gatekeeper）中对 Claude 模型的签名豁免限制。由于 Google `v1internal` 统一对底层全部模型施加严格的 AST `functionCall.thoughtSignature` 校验，在 Claude Code CLI 与 Desktop 端的多轮工具调用中对缺失签名的 `functionCall` 自动回填官方哨兵签名，彻底消除 `missing thought_signature` 400 拦截报错。 (PR #3652, Thanks to @modded-soldier-9)
