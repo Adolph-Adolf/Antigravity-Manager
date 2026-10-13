@@ -2936,7 +2936,7 @@ pub async fn handle_chat_completions(
         }
 
         let should_mark_limited = classification.should_lock_account();
-        let needs_quota_refresh = if config.request_type == "image_gen" && should_mark_limited {
+        let needs_quota_refresh = if should_mark_limited {
             token_manager
                 .mark_rate_limited_fast(
                     &email,
@@ -2955,20 +2955,6 @@ pub async fn handle_chat_completions(
         if needs_quota_refresh {
             token_manager
                 .refresh_quota_lock_after_fast_mark(&email, Some(&mapped_model))
-                .await;
-        }
-
-        // 3. 标记限流状态(用于 UI 显示)
-        if config.request_type != "image_gen" && should_mark_limited {
-            // [FIX] Use async version with model parameter for fine-grained rate limiting
-            token_manager
-                .mark_rate_limited_async(
-                    &email,
-                    status_code,
-                    retry_after.as_deref(),
-                    &error_text,
-                    Some(&mapped_model),
-                )
                 .await;
         }
 
@@ -4813,8 +4799,8 @@ pub async fn handle_completions(
         }
 
         if classification.should_lock_account() {
-            token_manager
-                .mark_rate_limited_async(
+            let needs_quota_refresh = token_manager
+                .mark_rate_limited_fast(
                     &email,
                     status_code,
                     retry_after.as_deref(),
@@ -4822,6 +4808,11 @@ pub async fn handle_completions(
                     Some(&mapped_model),
                 )
                 .await;
+            if needs_quota_refresh {
+                token_manager
+                    .refresh_quota_lock_after_fast_mark(&email, Some(&mapped_model))
+                    .await;
+            }
         }
 
         if classification.abandons_sticky_account() {
