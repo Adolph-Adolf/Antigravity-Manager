@@ -9,6 +9,8 @@
             -   **安全设置分类严格白名单过滤 (Fixes #3195)**: 在进站管线 `inbound.rs` 中对客户端传递的 `safetySettings` 执行严格白名单过滤，仅保留 Google Gemini 规范明确支持的五大合法分类（`HARASSMENT`、`HATE_SPEECH`、`SEXUALLY_EXPLICIT`、`DANGEROUS_CONTENT`、`CIVIC_INTEGRITY`），彻底杜绝 Codex `/v1/responses` 因携带废弃或非标分类被 Google 报错 `400 INVALID_ARGUMENT (element predicate failed)`。 (PR #3652, Thanks to @modded-soldier-9)
             -   **Shell 工具名称智能对齐 (Fixes #3224)**: 在 `response.rs` 的 `resolve_shell_tool_name` 中引入客户端声明感知。当客户端未声明 `local_shell_call` 但声明了 `bash` 时，自动将模型习惯性调用的 `local_shell_call` / `shell_command` 对齐映射为 `bash`，杜绝 Cline 等客户端报错 `Model tried to call unavailable tool 'local_shell_call'`。 (PR #3652, Thanks to @modded-soldier-9)
             -   **Pro 系列模型动态降级优化与输出上限保底 (Fixes #3215)**: 在 `token_manager.rs` 中优化 `pro_family` 候选排序，优先保留 `gemini-3.1-pro-high` 与 `gemini-3.1-pro-preview` 等全规格模型，避免优先选用仅有 2k 输出上限的旧版 `gemini-pro-agent`；并在 `model_specs.rs` 的 `get_max_output_tokens` 增加 8192 保护底线，防止模型长文本生成被异常卡死截断。 (PR #3652, Thanks to @modded-soldier-9)
+        -   **[账号列表与卡片周配额视图上下堆叠体验优化] (PR #3655, Ref #3189, Thanks to @ilyassbourass)**:
+            -   **周配额与 5H 滚动配额上下并列呈现**: 优化账号卡片（`AccountCard.tsx`）与列表（`AccountTable.tsx`）在切换至「周配额」窗口时的展示逻辑。由原先粗暴替换 5H 配额药丸改为上下分层堆叠：上方保留各模型的 5H 实时滚动配额，下方以淡蓝色分割线及边框并列呈现 7 天周配额胶囊，无需在两类视图间来回切换即可一眼兼顾实时可用量与本周总余量。 (PR #3655, Thanks to @ilyassbourass)
 
     *   **v4.9.7-beta.8 (2026-10-11)**:
         -   **[Token 统计「总览看板」与「深度洞察」视界接入、全链路思考量 (Thinking) 统计与全景深色主题统一]**:
