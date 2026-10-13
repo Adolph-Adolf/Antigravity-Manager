@@ -3,6 +3,13 @@
 > Complete version history for Antigravity Tools. Return to project home at [README.md](README.md).
 
 *   **Version History**:
+    *   **v4.9.7-beta.9 (2026-10-13)**:
+        -   **[Fix Safety Category Whitelist Filtering, Claude Tool Call Sentinel Injection, Shell Tool Name Alignment & Pro Quota Floor] (PR #3652, Fixes #3195, Fixes #3202, Fixes #3229, Fixes #3224, Fixes #3215, Thanks to @modded-soldier-9)**:
+            -   **Self-Healing Thought Signatures for Claude Tool Calls (Fixes #3202, Fixes #3229)**: Removed the outbound Gatekeeper exemption for Claude models. Because Google's `v1internal` endpoint enforces AST `functionCall.thoughtSignature` verification across all models indiscriminately, Gatekeeper now automatically backfills the official sentinel signature on any function calls missing signatures during multi-turn interactions in Claude Code CLI and Desktop, eradicating `400 missing thought_signature` errors. (PR #3652, Thanks to @modded-soldier-9)
+            -   **Strict Whitelist Filtering for Safety Categories (Fixes #3195)**: Enforced strict whitelist filtering on `safetySettings` in the inbound pipeline (`inbound.rs`), retaining only the 5 valid categories officially recognized by Google Gemini (`HARASSMENT`, `HATE_SPEECH`, `SEXUALLY_EXPLICIT`, `DANGEROUS_CONTENT`, `CIVIC_INTEGRITY`). Completely eliminates `400 INVALID_ARGUMENT (element predicate failed)` errors caused by Codex `/v1/responses` passing deprecated or custom categories. (PR #3652, Thanks to @modded-soldier-9)
+            -   **Intelligent Shell Tool Name Alignment (Fixes #3224)**: Enhanced `resolve_shell_tool_name` in `response.rs` with client declaration awareness. When clients only declare `bash` while the model invokes `local_shell_call` or `shell_command`, automatically maps the call to `bash`, preventing client errors such as `Model tried to call unavailable tool 'local_shell_call'`. (PR #3652, Thanks to @modded-soldier-9)
+            -   **Pro Model Fallback Ordering Optimization & Output Token Floor (Fixes #3215)**: Optimized candidate ordering for `pro_family` in `token_manager.rs` to prioritize full-spec models (`gemini-3.1-pro-high` and `gemini-3.1-pro-preview`) over legacy `gemini-pro-agent` channels; enforced an 8,192 token floor in `get_max_output_tokens` within `model_specs.rs` to prevent long generations from being truncated by restrictive 2k agent limits. (PR #3652, Thanks to @modded-soldier-9)
+
     *   **v4.9.7-beta.8 (2026-10-11)**:
         -   **[Token Stats Overview & Deep Insights Dashboard, Full-Stack Thinking (Reasoning) Stats & Unified Dark Theme]**:
             -   **Full-Stack Thinking / Reasoning Token Analytics**:

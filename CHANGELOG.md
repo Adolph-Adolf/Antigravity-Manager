@@ -3,6 +3,13 @@
 > 完整版本历史记录。返回项目主页请查看 [README_ZH.md](README_ZH.md) | [English Changelog](CHANGELOG_EN.md)。
 
 *   **版本演进**:
+    *   **v4.9.7-beta.9 (2026-10-13)**:
+        -   **[修复安全分类校验过滤、Claude工具调用哨兵注入、shell工具别名对齐与Pro模型限额截断] (PR #3652, Fixes #3195, Fixes #3202, Fixes #3229, Fixes #3224, Fixes #3215, Thanks to @modded-soldier-9)**:
+            -   **Claude 模型工具调用签名自愈 (Fixes #3202, Fixes #3229)**: 移除出站门禁（Gatekeeper）中对 Claude 模型的签名豁免限制。由于 Google `v1internal` 统一对底层全部模型施加严格的 AST `functionCall.thoughtSignature` 校验，在 Claude Code CLI 与 Desktop 端的多轮工具调用中对缺失签名的 `functionCall` 自动回填官方哨兵签名，彻底消除 `missing thought_signature` 400 拦截报错。 (PR #3652, Thanks to @modded-soldier-9)
+            -   **安全设置分类严格白名单过滤 (Fixes #3195)**: 在进站管线 `inbound.rs` 中对客户端传递的 `safetySettings` 执行严格白名单过滤，仅保留 Google Gemini 规范明确支持的五大合法分类（`HARASSMENT`、`HATE_SPEECH`、`SEXUALLY_EXPLICIT`、`DANGEROUS_CONTENT`、`CIVIC_INTEGRITY`），彻底杜绝 Codex `/v1/responses` 因携带废弃或非标分类被 Google 报错 `400 INVALID_ARGUMENT (element predicate failed)`。 (PR #3652, Thanks to @modded-soldier-9)
+            -   **Shell 工具名称智能对齐 (Fixes #3224)**: 在 `response.rs` 的 `resolve_shell_tool_name` 中引入客户端声明感知。当客户端未声明 `local_shell_call` 但声明了 `bash` 时，自动将模型习惯性调用的 `local_shell_call` / `shell_command` 对齐映射为 `bash`，杜绝 Cline 等客户端报错 `Model tried to call unavailable tool 'local_shell_call'`。 (PR #3652, Thanks to @modded-soldier-9)
+            -   **Pro 系列模型动态降级优化与输出上限保底 (Fixes #3215)**: 在 `token_manager.rs` 中优化 `pro_family` 候选排序，优先保留 `gemini-3.1-pro-high` 与 `gemini-3.1-pro-preview` 等全规格模型，避免优先选用仅有 2k 输出上限的旧版 `gemini-pro-agent`；并在 `model_specs.rs` 的 `get_max_output_tokens` 增加 8192 保护底线，防止模型长文本生成被异常卡死截断。 (PR #3652, Thanks to @modded-soldier-9)
+
     *   **v4.9.7-beta.8 (2026-10-11)**:
         -   **[Token 统计「总览看板」与「深度洞察」视界接入、全链路思考量 (Thinking) 统计与全景深色主题统一]**:
             -   **全链路思考量 (Thinking / Reasoning Tokens) 统计支持**:
