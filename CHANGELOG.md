@@ -11,6 +11,9 @@
             -   **Pro 系列模型动态降级优化与输出上限保底 (Fixes #3215)**: 在 `token_manager.rs` 中优化 `pro_family` 候选排序，优先保留 `gemini-3.1-pro-high` 与 `gemini-3.1-pro-preview` 等全规格模型，避免优先选用仅有 2k 输出上限的旧版 `gemini-pro-agent`；并在 `model_specs.rs` 的 `get_max_output_tokens` 增加 8192 保护底线，防止模型长文本生成被异常卡死截断。 (PR #3652, Thanks to @modded-soldier-9)
         -   **[账号列表与卡片周配额视图上下堆叠体验优化] (PR #3655, Ref #3189, Thanks to @ilyassbourass)**:
             -   **周配额与 5H 滚动配额上下并列呈现**: 优化账号卡片（`AccountCard.tsx`）与列表（`AccountTable.tsx`）在切换至「周配额」窗口时的展示逻辑。由原先粗暴替换 5H 配额药丸改为上下分层堆叠：上方保留各模型的 5H 实时滚动配额，下方以淡蓝色分割线及边框并列呈现 7 天周配额胶囊，无需在两类视图间来回切换即可一眼兼顾实时可用量与本周总余量。 (PR #3655, Thanks to @ilyassbourass)
+        -   **[上游端点动态健康追踪与传输超时收敛，根治 40~50s 级联等待延迟] (PR #3657, Fixes #3635, Ref #3525, Ref #3593, Thanks to @cubelikeplayDaniel)**:
+            -   **动态端点健康追踪器 (EndpointHealthTracker)**: 在 `upstream/client.rs` 中引入基于 `DashMap` 与 60 秒冷却 TTL 的端点健康追踪机制。在流式（`call_v1_internal_with_headers`）与辅助（`call_v1_internal_auxiliary`）请求中依据健康状态动态重排候选端点：健康端点第一优先路由，冷却期内的故障端点降级至末尾备用探活，一旦请求成功立即自愈恢复健康。彻底消除上一个请求踩坑超时后、后续同一会话请求依然无状态重复硬等 40s 死端点的缺陷，首包响应时间（TTFT）稳定降至 1~2s 原生水准。 (PR #3657, Thanks to @cubelikeplayDaniel)
+            -   **传输层建连与连接池超时收敛**: 将 TCP/TLS 建连超时（`connect_timeout`）由 20s 收敛至 5s，在冷启动首次探活期间即可迅速识别死端点，最坏情况级联延迟由 40s 压缩至 10s 以内；并将连接池空闲超时（`pool_idle_timeout`）由 90s 收敛至 45s，对齐 Google 前端网关（GFE）静默断流窗口，彻底杜绝复用已断开 TCP 连接引发 `error reading a body from connection` 的断流问题。 (PR #3657, Thanks to @cubelikeplayDaniel)
 
     *   **v4.9.7-beta.8 (2026-10-11)**:
         -   **[Token 统计「总览看板」与「深度洞察」视界接入、全链路思考量 (Thinking) 统计与全景深色主题统一]**:
