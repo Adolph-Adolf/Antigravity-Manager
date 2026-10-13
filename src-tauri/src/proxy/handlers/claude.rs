@@ -1831,6 +1831,8 @@ pub async fn handle_messages(
             }
         };
 
+        let in_flight_guard = Arc::new(token_manager.acquire_in_flight(&account_id));
+
         last_email = Some(email.clone());
         info!("✓ Using account: {} (type: {})", email, config.request_type);
 
@@ -2117,8 +2119,10 @@ pub async fn handle_messages(
                 // 这确保下游客户端（Claude Code 等）看门狗持续被心跳保活，绝不会因 Prefill 或推理思考等待触发 5 分钟无响应断连 (CLI error 'Request timed out')。
                 if client_wants_stream {
                     ttft_ms = upstream_req_start.elapsed().as_micros() as f64 / 1000.0;
+                    let in_flight_guard_for_stream = Arc::clone(&in_flight_guard);
                     let stream_mapped =
-                        claude_stream.map(|result| -> Result<Bytes, std::io::Error> {
+                        claude_stream.map(move |result| -> Result<Bytes, std::io::Error> {
+                            let _in_flight = &in_flight_guard_for_stream;
                             match result {
                                 Ok(b) => Ok(b),
                                 Err(e) => {
