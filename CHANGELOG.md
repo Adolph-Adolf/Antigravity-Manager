@@ -14,6 +14,9 @@
         -   **[上游端点动态健康追踪与传输超时收敛，根治 40~50s 级联等待延迟] (PR #3657, Fixes #3635, Ref #3525, Ref #3593, Thanks to @cubelikeplayDaniel)**:
             -   **动态端点健康追踪器 (EndpointHealthTracker)**: 在 `upstream/client.rs` 中引入基于 `DashMap` 与 60 秒冷却 TTL 的端点健康追踪机制。在流式（`call_v1_internal_with_headers`）与辅助（`call_v1_internal_auxiliary`）请求中依据健康状态动态重排候选端点：健康端点第一优先路由，冷却期内的故障端点降级至末尾备用探活，一旦请求成功立即自愈恢复健康。彻底消除上一个请求踩坑超时后、后续同一会话请求依然无状态重复硬等 40s 死端点的缺陷，首包响应时间（TTFT）稳定降至 1~2s 原生水准。 (PR #3657, Thanks to @cubelikeplayDaniel)
             -   **传输层建连与连接池超时收敛**: 将 TCP/TLS 建连超时（`connect_timeout`）由 20s 收敛至 5s，在冷启动首次探活期间即可迅速识别死端点，最坏情况级联延迟由 40s 压缩至 10s 以内；并将连接池空闲超时（`pool_idle_timeout`）由 90s 收敛至 45s，对齐 Google 前端网关（GFE）静默断流窗口，彻底杜绝复用已断开 TCP 连接引发 `error reading a body from connection` 的断流问题。 (PR #3657, Thanks to @cubelikeplayDaniel)
+        -   **[透传与可视化物理上游模型版本] (PR #3658, Resolves #3654, Thanks to @modded-soldier-9)**:
+            -   **X-Upstream-Model 响应头标准透传**: 在 OpenAI、Claude、Gemini 与 Warmup 各协议网关响应中统一注入 `X-Upstream-Model` 响应头，便于下游开发环境与调试抓包透明感知真实执行的上游物理模型版本。 (PR #3658, Thanks to @modded-soldier-9)
+            -   **真实版本解析与大盘全链路可视化**: 监控中间件从流式 SSE 候选帧（`modelVersion`）及非流式响应中自动捕获上游物理版本，自愈存储至 `request_logs` 数据库；并在 `ProxyMonitor` 监控表格（以 `请求模型 => 映射模型 (⚡ 真实物理版本)`）及 `MiniView` 迷你悬浮条中清晰呈现。 (PR #3658, Thanks to @modded-soldier-9)
 
     *   **v4.9.7-beta.8 (2026-10-11)**:
         -   **[Token 统计「总览看板」与「深度洞察」视界接入、全链路思考量 (Thinking) 统计与全景深色主题统一]**:
