@@ -643,6 +643,7 @@ fn consolidate_non_streaming_response(
         "norm_ms",
         "thinking_ms",
         "ttft_ms",
+        "ttft_overhead_ms",
         "stream_ms",
         "total_ms",
     ] {
@@ -652,6 +653,31 @@ fn consolidate_non_streaming_response(
                 let out_key = key.replace("_ms", "_s");
                 timing_obj.insert(out_key, serde_json::json!(n / 1000.0));
             }
+        }
+    }
+    if let (Some(ttft), Some(overhead)) = (
+        timing_obj.get("ttft_s").and_then(|v| v.as_f64()),
+        timing_obj.get("ttft_overhead_s").and_then(|v| v.as_f64()),
+    ) {
+        if overhead > 0.0 {
+            timing_obj.insert(
+                "ttft_total_wait_s".to_string(),
+                serde_json::json!(ttft + overhead),
+            );
+        }
+    }
+
+    let attempts_opt = crate::proxy::monitor::CURRENT_UPSTREAM_CAPTURE
+        .try_with(|holder| holder.take_attempts())
+        .ok()
+        .flatten();
+
+    if let Some(attempts) = attempts_opt {
+        if !attempts.is_empty() {
+            timing_obj.insert(
+                "ttft_attempts".to_string(),
+                serde_json::to_value(&attempts).unwrap_or(serde_json::Value::Null),
+            );
         }
     }
     if !timing_obj.contains_key("total_s") {
@@ -1395,9 +1421,45 @@ pub async fn monitor_middleware(
                         timing_obj.insert("thinking_s".to_string(), serde_json::json!(n / 1000.0));
                     }
                 }
+                let mut ttft_val = 0.0;
                 if let Some(ttft) = headers_map.get("x-timing-ttft-ms").and_then(|v| v.as_str()) {
                     if let Ok(n) = ttft.parse::<f64>() {
-                        timing_obj.insert("ttft_s".to_string(), serde_json::json!(n / 1000.0));
+                        ttft_val = n / 1000.0;
+                        timing_obj.insert("ttft_s".to_string(), serde_json::json!(ttft_val));
+                    }
+                }
+                if let Some(oh) = headers_map
+                    .get("x-timing-ttft-overhead-ms")
+                    .and_then(|v| v.as_str())
+                {
+                    if let Ok(n) = oh.parse::<f64>() {
+                        let overhead_s = n / 1000.0;
+                        if overhead_s > 0.0 {
+                            timing_obj.insert(
+                                "ttft_overhead_s".to_string(),
+                                serde_json::json!(overhead_s),
+                            );
+                            if ttft_val > 0.0 {
+                                timing_obj.insert(
+                                    "ttft_total_wait_s".to_string(),
+                                    serde_json::json!(ttft_val + overhead_s),
+                                );
+                            }
+                        }
+                    }
+                }
+
+                let attempts_opt = crate::proxy::monitor::CURRENT_UPSTREAM_CAPTURE
+                    .try_with(|holder| holder.take_attempts())
+                    .ok()
+                    .flatten();
+
+                if let Some(attempts) = attempts_opt {
+                    if !attempts.is_empty() {
+                        timing_obj.insert(
+                            "ttft_attempts".to_string(),
+                            serde_json::to_value(&attempts).unwrap_or(serde_json::Value::Null),
+                        );
                     }
                 }
                 timing_obj.insert(

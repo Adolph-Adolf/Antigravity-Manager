@@ -9,23 +9,63 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use tokio::time::Duration;
 
-/// 端点降级尝试的记录信息
-#[derive(Debug, Clone)]
+/// 解析端点易读简称 (Daily, Sandbox, Prod, Custom)
+pub fn parse_endpoint_name(base_url: &str) -> &'static str {
+    if base_url.contains("sandbox") {
+        "Sandbox"
+    } else if base_url.contains("daily") {
+        "Daily"
+    } else if base_url.contains("cloudcode-pa.googleapis.com") {
+        "Prod"
+    } else {
+        "Custom"
+    }
+}
+
+/// 端点降级与请求尝试的链路记录信息
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct FallbackAttemptLog {
+    /// 尝试的端点简称 (如 "Daily", "Sandbox", "Prod")
+    pub endpoint_name: String,
     /// 尝试的端点 URL
     pub endpoint_url: String,
     /// HTTP 状态码 (网络错误时为 None)
     pub status: Option<u16>,
+    /// 耗时 (秒)
+    pub duration_s: f64,
+    /// 距离上一尝试失败到当前尝试发起之间的 fallback 切换延迟 (秒)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub switch_delay_s: Option<f64>,
     /// 错误描述
     pub error: String,
+    /// 是否为最终命中的有效端点
+    pub is_effective: bool,
 }
 
 /// 上游调用结果，包含响应和降级尝试记录
 pub struct UpstreamCallResult {
     /// 最终的 HTTP 响应
     pub response: Response,
-    /// 降级过程中失败的端点尝试记录 (成功时为空)
+    /// 所有端点尝试记录 (包含前置失败项与最终有效项)
     pub fallback_attempts: Vec<FallbackAttemptLog>,
+    /// 最终有效端点发起请求的时间戳 (用于计算纯粹的点到点首包 TTFT)
+    pub effective_attempt_start: std::time::Instant,
+}
+
+impl UpstreamCallResult {
+    /// 是否发生了端点降级 (存在非有效端点尝试)
+    pub fn has_fallback(&self) -> bool {
+        self.fallback_attempts.iter().any(|a| !a.is_effective)
+    }
+
+    /// 获取前置失败端点累计的总开销 (秒，包含失败耗时与切换延迟)
+    pub fn fallback_overhead_s(&self) -> f64 {
+        self.fallback_attempts
+            .iter()
+            .filter(|a| !a.is_effective)
+            .map(|a| a.duration_s + a.switch_delay_s.unwrap_or(0.0))
+            .sum()
+    }
 }
 
 /// 邮箱脱敏：只显示前3位 + *** + @域名前2位 + ***
@@ -585,12 +625,13 @@ impl UpstreamClient {
         });
 
         let mut has_triggered_downgrade = false;
+        let mut fallback_attempts: Vec<FallbackAttemptLog> = Vec::new();
+        let mut last_attempt_failed_at: Option<std::time::Instant> = None;
 
         // [TEMPORARY FIX #3074] 针对 403 SERVICE_DISABLED 的自动降级重试逻辑
         // 我们包装一层循环，以便在检测到特定错误时移除 Header 并重试
         loop {
             let mut last_err: Option<String> = None;
-            let mut fallback_attempts: Vec<FallbackAttemptLog> = Vec::new();
             let mut should_retry_without_header = false;
 
             // 动态健康度排序：优先尝试健康端点，跳过处于冷却期的故障端点，避免无状态重复累积 40s 超时
@@ -619,14 +660,17 @@ impl UpstreamClient {
                     req_builder = req_builder.body(body_bytes.clone());
                 }
 
+                let switch_delay_s = last_attempt_failed_at.map(|t| t.elapsed().as_secs_f64());
+                let attempt_start = std::time::Instant::now();
                 let response = req_builder.send().await;
+                let duration_s = attempt_start.elapsed().as_secs_f64();
 
                 match response {
                     Ok(resp) => {
                         let status = resp.status();
                         if status.is_success() {
                             self.endpoint_health.mark_success(base_url);
-                            if idx > 0 {
+                            if idx > 0 || has_triggered_downgrade {
                                 tracing::info!(
                                     "✓ Upstream fallback succeeded | Endpoint: {} | Status: {} | Next endpoints available: {}",
                                     base_url,
@@ -640,9 +684,19 @@ impl UpstreamClient {
                                     status
                                 );
                             }
+                            fallback_attempts.push(FallbackAttemptLog {
+                                endpoint_name: parse_endpoint_name(base_url).to_string(),
+                                endpoint_url: url.clone(),
+                                status: Some(status.as_u16()),
+                                duration_s,
+                                switch_delay_s,
+                                error: String::new(),
+                                is_effective: true,
+                            });
                             return Ok(UpstreamCallResult {
                                 response: resp,
                                 fallback_attempts,
+                                effective_attempt_start: attempt_start,
                             });
                         }
 
@@ -652,6 +706,18 @@ impl UpstreamClient {
                             && !has_triggered_downgrade
                             && headers.contains_key("x-goog-user-project")
                         {
+                            last_attempt_failed_at = Some(std::time::Instant::now());
+                            fallback_attempts.push(FallbackAttemptLog {
+                                endpoint_name: parse_endpoint_name(base_url).to_string(),
+                                endpoint_url: url.clone(),
+                                status: Some(status.as_u16()),
+                                duration_s,
+                                switch_delay_s,
+                                error:
+                                    "403 Forbidden with project header (downgrading without header)"
+                                        .to_string(),
+                                is_effective: false,
+                            });
                             tracing::warn!(
                                 "Detected 403 Forbidden with project header, retrying WITHOUT x-goog-user-project header (Account: {:?})",
                                 account_id
@@ -663,6 +729,7 @@ impl UpstreamClient {
                         // 如果有下一个端点且当前错误可重试，则切换
                         if has_next && Self::should_try_next_endpoint(status) {
                             self.endpoint_health.mark_failure(base_url);
+                            last_attempt_failed_at = Some(std::time::Instant::now());
                             let err_msg = format!("Upstream {} returned {}", base_url, status);
                             tracing::warn!(
                                 "Upstream endpoint returned {} at {} (method={}), trying next endpoint",
@@ -672,29 +739,48 @@ impl UpstreamClient {
                             );
                             // [NEW] 记录降级尝试
                             fallback_attempts.push(FallbackAttemptLog {
+                                endpoint_name: parse_endpoint_name(base_url).to_string(),
                                 endpoint_url: url.clone(),
                                 status: Some(status.as_u16()),
+                                duration_s,
+                                switch_delay_s,
                                 error: err_msg.clone(),
+                                is_effective: false,
                             });
                             last_err = Some(err_msg);
                             continue;
                         }
 
                         // 不可重试的错误或已是最后一个端点，直接返回
+                        fallback_attempts.push(FallbackAttemptLog {
+                            endpoint_name: parse_endpoint_name(base_url).to_string(),
+                            endpoint_url: url.clone(),
+                            status: Some(status.as_u16()),
+                            duration_s,
+                            switch_delay_s,
+                            error: format!("Upstream {} returned {}", base_url, status),
+                            is_effective: false,
+                        });
                         return Ok(UpstreamCallResult {
                             response: resp,
                             fallback_attempts,
+                            effective_attempt_start: attempt_start,
                         });
                     }
                     Err(e) => {
                         self.endpoint_health.mark_failure(base_url);
+                        last_attempt_failed_at = Some(std::time::Instant::now());
                         let msg = format!("HTTP request failed at {}: {}", base_url, e);
                         tracing::debug!("{}", msg);
                         // [NEW] 记录网络错误的降级尝试
                         fallback_attempts.push(FallbackAttemptLog {
+                            endpoint_name: parse_endpoint_name(base_url).to_string(),
                             endpoint_url: url.clone(),
                             status: None,
+                            duration_s,
+                            switch_delay_s,
                             error: msg.clone(),
+                            is_effective: false,
                         });
                         last_err = Some(msg);
 

@@ -1867,6 +1867,7 @@ pub async fn handle_chat_completions(
     let mut norm_ms = 0.0f64;
     let mut think_fill_ms = 0.0f64;
     let mut ttft_ms = 0.0f64;
+    let mut fallback_overhead_ms = 0.0f64;
 
     let trace_id = format!("req_{}", chrono::Utc::now().timestamp_subsec_millis());
     info!(
@@ -2353,8 +2354,12 @@ pub async fn handle_chat_completions(
             }
         };
 
+        let effective_attempt_start = call_result.effective_attempt_start;
+        let mut fallback_attempts = call_result.fallback_attempts.clone();
+        fallback_overhead_ms = call_result.fallback_overhead_s() * 1000.0;
+
         // [NEW] 记录端点降级日志到 debug 文件
-        if !call_result.fallback_attempts.is_empty() && debug_logger::is_enabled(&debug_cfg) {
+        if call_result.has_fallback() && debug_logger::is_enabled(&debug_cfg) {
             let fallback_entries: Vec<Value> = call_result
                 .fallback_attempts
                 .iter()
@@ -2499,7 +2504,17 @@ pub async fn handle_chat_completions(
                             }
 
                             // We found real data!
-                            ttft_ms = upstream_req_start.elapsed().as_micros() as f64 / 1000.0;
+                            ttft_ms = effective_attempt_start.elapsed().as_micros() as f64 / 1000.0;
+                            if let Some(effective_item) =
+                                fallback_attempts.iter_mut().find(|a| a.is_effective)
+                            {
+                                effective_item.duration_s = ttft_ms / 1000.0;
+                            }
+                            let _ = crate::proxy::monitor::CURRENT_UPSTREAM_CAPTURE.try_with(
+                                |holder| {
+                                    holder.set_attempts(fallback_attempts.clone());
+                                },
+                            );
                             first_data_chunk = Some(bytes);
                             break;
                         }
@@ -2655,6 +2670,10 @@ pub async fn handle_chat_completions(
                         .header("X-Timing-Norm-Ms", format!("{:.3}", norm_ms))
                         .header("X-Timing-Thinking-Ms", format!("{:.3}", think_fill_ms))
                         .header("X-Timing-Ttft-Ms", format!("{:.3}", ttft_ms))
+                        .header(
+                            "X-Timing-Ttft-Overhead-Ms",
+                            format!("{:.3}", fallback_overhead_ms),
+                        )
                         .body(body)
                         .unwrap()
                         .into_response());
@@ -2700,6 +2719,10 @@ pub async fn handle_chat_completions(
                                 .header("X-Timing-Norm-Ms", format!("{:.3}", norm_ms))
                                 .header("X-Timing-Thinking-Ms", format!("{:.3}", think_fill_ms))
                                 .header("X-Timing-Ttft-Ms", format!("{:.3}", ttft_ms))
+                                .header(
+                                    "X-Timing-Ttft-Overhead-Ms",
+                                    format!("{:.3}", fallback_overhead_ms),
+                                )
                                 .body(Body::from(
                                     serde_json::to_string(&full_response).unwrap_or_default(),
                                 ))
@@ -2718,7 +2741,13 @@ pub async fn handle_chat_completions(
                 }
             }
 
-            ttft_ms = upstream_req_start.elapsed().as_micros() as f64 / 1000.0;
+            ttft_ms = effective_attempt_start.elapsed().as_micros() as f64 / 1000.0;
+            if let Some(effective_item) = fallback_attempts.iter_mut().find(|a| a.is_effective) {
+                effective_item.duration_s = ttft_ms / 1000.0;
+            }
+            let _ = crate::proxy::monitor::CURRENT_UPSTREAM_CAPTURE.try_with(|holder| {
+                holder.set_attempts(fallback_attempts.clone());
+            });
             let gemini_resp: Value = response
                 .json()
                 .await
@@ -3915,6 +3944,7 @@ pub async fn handle_completions(
 
     let clean_ms = clean_start.elapsed().as_micros() as f64 / 1000.0;
     let mut ttft_ms = 0.0f64;
+    let mut fallback_overhead_ms = 0.0f64;
 
     if debug_logger::is_enabled(&debug_cfg) {
         let payload = json!({
@@ -4162,6 +4192,10 @@ pub async fn handle_completions(
             }
         };
 
+        let effective_attempt_start = call_result.effective_attempt_start;
+        let mut fallback_attempts = call_result.fallback_attempts.clone();
+        fallback_overhead_ms = call_result.fallback_overhead_s() * 1000.0;
+
         let response = call_result.response;
         let upstream_url = response.url().to_string();
         let status = response.status();
@@ -4279,7 +4313,18 @@ pub async fn handle_completions(
                                     retry_this_account = true;
                                     break;
                                 }
-                                ttft_ms = upstream_req_start.elapsed().as_micros() as f64 / 1000.0;
+                                ttft_ms =
+                                    effective_attempt_start.elapsed().as_micros() as f64 / 1000.0;
+                                if let Some(effective_item) =
+                                    fallback_attempts.iter_mut().find(|a| a.is_effective)
+                                {
+                                    effective_item.duration_s = ttft_ms / 1000.0;
+                                }
+                                let _ = crate::proxy::monitor::CURRENT_UPSTREAM_CAPTURE.try_with(
+                                    |holder| {
+                                        holder.set_attempts(fallback_attempts.clone());
+                                    },
+                                );
                                 first_data_chunk = Some(bytes);
                                 break;
                             }
@@ -4373,6 +4418,10 @@ pub async fn handle_completions(
                         .header("X-Timing-Norm-Ms", format!("{:.3}", norm_ms))
                         .header("X-Timing-Thinking-Ms", format!("{:.3}", think_fill_ms))
                         .header("X-Timing-Ttft-Ms", format!("{:.3}", ttft_ms))
+                        .header(
+                            "X-Timing-Ttft-Overhead-Ms",
+                            format!("{:.3}", fallback_overhead_ms),
+                        )
                         .body(Body::from_stream(combined_stream))
                         .unwrap()
                         .into_response();
@@ -4427,7 +4476,18 @@ pub async fn handle_completions(
                                     retry_this_account = true;
                                     break;
                                 }
-                                ttft_ms = upstream_req_start.elapsed().as_micros() as f64 / 1000.0;
+                                ttft_ms =
+                                    effective_attempt_start.elapsed().as_micros() as f64 / 1000.0;
+                                if let Some(effective_item) =
+                                    fallback_attempts.iter_mut().find(|a| a.is_effective)
+                                {
+                                    effective_item.duration_s = ttft_ms / 1000.0;
+                                }
+                                let _ = crate::proxy::monitor::CURRENT_UPSTREAM_CAPTURE.try_with(
+                                    |holder| {
+                                        holder.set_attempts(fallback_attempts.clone());
+                                    },
+                                );
                                 first_data_chunk = Some(bytes);
                                 break;
                             }
@@ -4542,6 +4602,10 @@ pub async fn handle_completions(
                                     .header("X-Timing-Norm-Ms", format!("{:.3}", norm_ms))
                                     .header("X-Timing-Thinking-Ms", format!("{:.3}", think_fill_ms))
                                     .header("X-Timing-Ttft-Ms", format!("{:.3}", ttft_ms))
+                                    .header(
+                                        "X-Timing-Ttft-Overhead-Ms",
+                                        format!("{:.3}", fallback_overhead_ms),
+                                    )
                                     .body(Body::from(
                                         serde_json::to_string(&resp).unwrap_or_default(),
                                     ))
@@ -4617,6 +4681,10 @@ pub async fn handle_completions(
                                 .header("X-Timing-Norm-Ms", format!("{:.3}", norm_ms))
                                 .header("X-Timing-Thinking-Ms", format!("{:.3}", think_fill_ms))
                                 .header("X-Timing-Ttft-Ms", format!("{:.3}", ttft_ms))
+                                .header(
+                                    "X-Timing-Ttft-Overhead-Ms",
+                                    format!("{:.3}", fallback_overhead_ms),
+                                )
                                 .body(Body::from(
                                     serde_json::to_string(&legacy_resp).unwrap_or_default(),
                                 ))
@@ -4634,7 +4702,13 @@ pub async fn handle_completions(
                 }
             }
 
-            ttft_ms = upstream_req_start.elapsed().as_micros() as f64 / 1000.0;
+            ttft_ms = effective_attempt_start.elapsed().as_micros() as f64 / 1000.0;
+            if let Some(effective_item) = fallback_attempts.iter_mut().find(|a| a.is_effective) {
+                effective_item.duration_s = ttft_ms / 1000.0;
+            }
+            let _ = crate::proxy::monitor::CURRENT_UPSTREAM_CAPTURE.try_with(|holder| {
+                holder.set_attempts(fallback_attempts.clone());
+            });
             let gemini_resp: Value = match response.json().await {
                 Ok(json) => json,
                 Err(e) => {

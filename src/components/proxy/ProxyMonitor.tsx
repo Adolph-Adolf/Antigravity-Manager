@@ -523,11 +523,24 @@ const LogTable: React.FC<LogTableProps> = ({
 
 
 
+export interface EndpointAttemptInfo {
+    endpoint_name: string;
+    endpoint_url: string;
+    status?: number;
+    duration_s: number;
+    switch_delay_s?: number;
+    error?: string;
+    is_effective: boolean;
+}
+
 interface StageTimingInfo {
     cleanSec?: number;
     normSec?: number;
     thinkingSec?: number;
     ttftSec?: number;
+    ttftOverheadSec?: number;
+    ttftTotalWaitSec?: number;
+    ttftAttempts?: EndpointAttemptInfo[];
     streamSec?: number;
     totalSec?: number;
     isOldRecordWithoutStages?: boolean;
@@ -542,6 +555,9 @@ const parseTimingFromHeadersAndBody = (
     let normSec: number | undefined;
     let thinkingSec: number | undefined;
     let ttftSec: number | undefined;
+    let ttftOverheadSec: number | undefined;
+    let ttftTotalWaitSec: number | undefined;
+    let ttftAttempts: EndpointAttemptInfo[] | undefined;
     let streamSec: number | undefined;
     let totalSec: number | undefined;
 
@@ -562,6 +578,15 @@ const parseTimingFromHeadersAndBody = (
 
                 if (typeof t.ttft_s === 'number') ttftSec = t.ttft_s;
                 else if (typeof t.ttft_ms === 'number') ttftSec = t.ttft_ms / 1000;
+
+                if (typeof t.ttft_overhead_s === 'number') ttftOverheadSec = t.ttft_overhead_s;
+                else if (typeof t.ttft_overhead_ms === 'number') ttftOverheadSec = t.ttft_overhead_ms / 1000;
+
+                if (typeof t.ttft_total_wait_s === 'number') ttftTotalWaitSec = t.ttft_total_wait_s;
+
+                if (Array.isArray(t.ttft_attempts)) {
+                    ttftAttempts = t.ttft_attempts;
+                }
 
                 if (typeof t.stream_s === 'number') streamSec = t.stream_s;
                 else if (typeof t.stream_ms === 'number') streamSec = t.stream_ms / 1000;
@@ -611,6 +636,10 @@ const parseTimingFromHeadersAndBody = (
                     const ms = getVal('x-timing-ttft-ms');
                     if (ms !== undefined) ttftSec = ms / 1000;
                 }
+                if (ttftOverheadSec === undefined) {
+                    const ms = getVal('x-timing-ttft-overhead-ms');
+                    if (ms !== undefined) ttftOverheadSec = ms / 1000;
+                }
                 if (streamSec === undefined) {
                     const ms = getVal('x-timing-stream-ms');
                     if (ms !== undefined) streamSec = ms / 1000;
@@ -621,6 +650,14 @@ const parseTimingFromHeadersAndBody = (
                 }
             }
         } catch {}
+    }
+
+    if (ttftTotalWaitSec === undefined && ttftSec !== undefined) {
+        if (ttftOverheadSec !== undefined && ttftOverheadSec > 0) {
+            ttftTotalWaitSec = ttftSec + ttftOverheadSec;
+        } else {
+            ttftTotalWaitSec = ttftSec;
+        }
     }
 
     // 3. Fallback for totalSec if durationMs exists
@@ -644,6 +681,9 @@ const parseTimingFromHeadersAndBody = (
         normSec,
         thinkingSec,
         ttftSec,
+        ttftOverheadSec,
+        ttftTotalWaitSec,
+        ttftAttempts,
         streamSec,
         totalSec,
         isOldRecordWithoutStages,
@@ -673,48 +713,69 @@ const TimingDiagnosticsCard: React.FC<TimingDiagnosticsCardProps> = ({ timing, o
 
     const totalSec = timing.totalSec || 0;
 
-    const stages = useMemo(() => [
-        {
-            key: 'clean',
-            label: t('monitor.timing.clean', '会话清洗 (Clean)'),
-            desc: t('monitor.timing.clean_desc', '清理缓存控制 / 合并同角色 / 历史提纯'),
-            sec: timing.cleanSec,
-            color: 'bg-indigo-500',
-            textColor: 'text-indigo-600 dark:text-indigo-400',
-        },
-        {
-            key: 'norm',
-            label: t('monitor.timing.norm', '中转归一 (Normalize)'),
-            desc: t('monitor.timing.norm_desc', '模型映射 / 账号调度 / 跨协议转换'),
-            sec: timing.normSec,
-            color: 'bg-purple-500',
-            textColor: 'text-purple-600 dark:text-purple-400',
-        },
-        {
-            key: 'thinking',
-            label: t('monitor.timing.thinking', '思维块回填 (ThinkingStore)'),
-            desc: t('monitor.timing.thinking_desc', '持久化思维链及补齐商业Agent历史签名'),
-            sec: timing.thinkingSec,
-            color: 'bg-amber-500',
-            textColor: 'text-amber-600 dark:text-amber-400',
-        },
-        {
+    const stages = useMemo(() => {
+        const list = [
+            {
+                key: 'clean',
+                label: t('monitor.timing.clean', '会话清洗 (Clean)'),
+                desc: t('monitor.timing.clean_desc', '清理缓存控制 / 合并同角色 / 历史提纯'),
+                sec: timing.cleanSec,
+                color: 'bg-indigo-500',
+                textColor: 'text-indigo-600 dark:text-indigo-400',
+            },
+            {
+                key: 'norm',
+                label: t('monitor.timing.norm', '中转归一 (Normalize)'),
+                desc: t('monitor.timing.norm_desc', '模型映射 / 账号调度 / 跨协议转换'),
+                sec: timing.normSec,
+                color: 'bg-purple-500',
+                textColor: 'text-purple-600 dark:text-purple-400',
+            },
+            {
+                key: 'thinking',
+                label: t('monitor.timing.thinking', '思维块回填 (ThinkingStore)'),
+                desc: t('monitor.timing.thinking_desc', '持久化思维链及补齐商业Agent历史签名'),
+                sec: timing.thinkingSec,
+                color: 'bg-amber-500',
+                textColor: 'text-amber-600 dark:text-amber-400',
+            },
+        ];
+
+        if (timing.ttftOverheadSec !== undefined && timing.ttftOverheadSec > 0) {
+            list.push({
+                key: 'fallback_overhead',
+                label: t('monitor.timing.fallback_overhead', 'Fallback 降级损耗'),
+                desc: t('monitor.timing.fallback_overhead_desc', '端点故障超时转移与切换延迟开销'),
+                sec: timing.ttftOverheadSec,
+                color: 'bg-rose-500',
+                textColor: 'text-rose-600 dark:text-rose-400',
+            });
+        }
+
+        list.push({
             key: 'ttft',
-            label: t('monitor.timing.ttft', '等待首包 (TTFT)'),
-            desc: t('monitor.timing.ttft_desc', '网关上送至接收首个数据包 (含首Token/思考块)'),
+            label: timing.ttftOverheadSec
+                ? t('monitor.timing.ttft_pure', '等待首包 (纯 TTFT)')
+                : t('monitor.timing.ttft', '等待首包 (TTFT)'),
+            desc: timing.ttftOverheadSec
+                ? t('monitor.timing.ttft_pure_desc', '最终命中端点发出请求至首个有效数据块到达 (纯首包耗时)')
+                : t('monitor.timing.ttft_desc', '网关上送至接收首个数据包 (含首Token/思考块)'),
             sec: timing.ttftSec,
             color: 'bg-emerald-500',
             textColor: 'text-emerald-600 dark:text-emerald-400',
-        },
-        {
+        });
+
+        list.push({
             key: 'stream',
             label: t('monitor.timing.stream', '流式传输 (Stream)'),
             desc: t('monitor.timing.stream_desc', '首个数据块到达至整条流式响应完成'),
             sec: timing.streamSec,
             color: 'bg-sky-500',
             textColor: 'text-sky-600 dark:text-sky-400',
-        },
-    ], [timing, t]);
+        });
+
+        return list;
+    }, [timing, t]);
 
     const handleCopy = (e: React.MouseEvent) => {
         e.stopPropagation();
@@ -722,7 +783,23 @@ const TimingDiagnosticsCard: React.FC<TimingDiagnosticsCardProps> = ({ timing, o
         if (timing.cleanSec !== undefined) lines.push(`会话清洗 (Clean)：${formatSeconds(timing.cleanSec)}`);
         if (timing.normSec !== undefined) lines.push(`中转归一 (Normalize)：${formatSeconds(timing.normSec)}`);
         if (timing.thinkingSec !== undefined) lines.push(`思维块回填 (ThinkingStore)：${formatSeconds(timing.thinkingSec)}`);
-        if (timing.ttftSec !== undefined) lines.push(`等待首包 (TTFT)：${formatSeconds(timing.ttftSec)}`);
+
+        if (timing.ttftAttempts && timing.ttftAttempts.length > 1) {
+            lines.push(`等待首包 (TTFT 链路)：`);
+            timing.ttftAttempts.forEach((att, idx) => {
+                if (att.switch_delay_s !== undefined && att.switch_delay_s > 0) {
+                    lines.push(`  ↳ Fallback 切换延迟: ${formatSeconds(att.switch_delay_s)}`);
+                }
+                const statusStr = att.status ? `${att.status}` : '网络超时/异常';
+                const effectiveStr = att.is_effective ? ' (纯首包命中)' : '';
+                const errStr = att.error && !att.is_effective ? ` [${att.error}]` : '';
+                lines.push(`  - 尝试 ${idx + 1} (${att.endpoint_name})：${formatSeconds(att.duration_s)} 状态: ${statusStr}${effectiveStr}${errStr}`);
+            });
+            lines.push(`  - 首包总耗时：${formatSeconds(timing.ttftTotalWaitSec || timing.ttftSec)} (纯首包: ${formatSeconds(timing.ttftSec)}, 降级转移损耗: ${formatSeconds(timing.ttftOverheadSec)})`);
+        } else if (timing.ttftSec !== undefined) {
+            lines.push(`等待首包 (TTFT)：${formatSeconds(timing.ttftSec)}`);
+        }
+
         if (timing.streamSec !== undefined) lines.push(`流式传输 (Stream)：${formatSeconds(timing.streamSec)}`);
         lines.push(`总耗时：${formatSeconds(timing.totalSec)}`);
 
@@ -819,33 +896,89 @@ const TimingDiagnosticsCard: React.FC<TimingDiagnosticsCardProps> = ({ timing, o
                         {stages.map((st) => {
                             const hasVal = st.sec !== undefined;
                             const pct = hasVal && totalSec > 0 ? ((st.sec! / totalSec) * 100).toFixed(1) : undefined;
+                            const isTtft = st.key === 'ttft';
+                            const hasFallback =
+                                isTtft &&
+                                ((timing.ttftAttempts && timing.ttftAttempts.length > 1) ||
+                                    (timing.ttftOverheadSec !== undefined && timing.ttftOverheadSec > 0));
+
                             return (
                                 <div
                                     key={st.key}
-                                    className="flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-lg bg-white dark:bg-base-200 border border-gray-200/80 dark:border-base-300/90 hover:border-emerald-500/40 transition-colors shadow-2xs"
+                                    className="px-2.5 py-1.5 rounded-lg bg-white dark:bg-base-200 border border-gray-200/80 dark:border-base-300/90 hover:border-emerald-500/40 transition-colors shadow-2xs"
                                 >
-                                    <div className="flex items-center gap-2.5 min-w-0">
-                                        <span className={`w-2.5 h-2.5 rounded-full ${st.color} shrink-0`} />
-                                        <div className="min-w-0">
-                                            <span className="font-bold text-gray-900 dark:text-white truncate block text-xs">
-                                                {st.label}
+                                    <div className="flex items-center justify-between gap-2">
+                                        <div className="flex items-center gap-2.5 min-w-0">
+                                            <span className={`w-2.5 h-2.5 rounded-full ${st.color} shrink-0`} />
+                                            <div className="min-w-0">
+                                                <div className="flex items-center gap-1.5 flex-wrap">
+                                                    <span className="font-bold text-gray-900 dark:text-white truncate block text-xs">
+                                                        {st.label}
+                                                    </span>
+                                                    {hasFallback && (
+                                                        <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-800 dark:bg-amber-950/70 dark:text-amber-300 border border-amber-300 dark:border-amber-800/60 shrink-0">
+                                                            {t('monitor.timing.fallback_badge', '已降级')} ({timing.ttftAttempts?.length || 2}次尝试)
+                                                        </span>
+                                                    )}
+                                                </div>
+                                                <span className="text-[10px] text-gray-500 dark:text-gray-400 truncate block">
+                                                    {st.desc}
+                                                </span>
+                                            </div>
+                                        </div>
+
+                                        <div className="flex items-baseline gap-2 shrink-0 text-right font-mono">
+                                            <span className={`text-xs font-black ${hasVal ? st.textColor : 'text-gray-400'}`}>
+                                                {formatSeconds(st.sec)}
                                             </span>
-                                            <span className="text-[10px] text-gray-500 dark:text-gray-400 truncate block">
-                                                {st.desc}
-                                            </span>
+                                            {pct !== undefined && (
+                                                <span className="text-[11px] font-bold text-gray-500 dark:text-gray-400 w-11 text-right">
+                                                    {pct}%
+                                                </span>
+                                            )}
                                         </div>
                                     </div>
 
-                                    <div className="flex items-baseline gap-2 shrink-0 text-right font-mono">
-                                        <span className={`text-xs font-black ${hasVal ? st.textColor : 'text-gray-400'}`}>
-                                            {formatSeconds(st.sec)}
-                                        </span>
-                                        {pct !== undefined && (
-                                            <span className="text-[11px] font-bold text-gray-500 dark:text-gray-400 w-11 text-right">
-                                                {pct}%
-                                            </span>
-                                        )}
-                                    </div>
+                                    {/* 动态展示多端点 TTFT 链路明细时间线 */}
+                                    {hasFallback && timing.ttftAttempts && timing.ttftAttempts.length > 0 && (
+                                        <div className="mt-2 pt-2 border-t border-dashed border-gray-200 dark:border-base-300 space-y-1.5 font-mono text-[11px]">
+                                            {timing.ttftAttempts.map((att, idx) => (
+                                                <React.Fragment key={idx}>
+                                                    {att.switch_delay_s !== undefined && att.switch_delay_s > 0 && (
+                                                        <div className="flex items-center gap-1.5 pl-3 text-[10px] text-amber-600 dark:text-amber-400">
+                                                            <span>↳ ⚡ {t('monitor.timing.switch_delay', 'Fallback 切换延迟')}:</span>
+                                                            <span className="font-bold">{formatSeconds(att.switch_delay_s)}</span>
+                                                        </div>
+                                                    )}
+                                                    <div className={`p-2 rounded border ${att.is_effective ? 'bg-emerald-500/10 dark:bg-emerald-950/30 border-emerald-500/30 text-emerald-950 dark:text-emerald-100' : 'bg-rose-500/10 dark:bg-rose-950/30 border-rose-500/30 text-rose-950 dark:text-rose-100'}`}>
+                                                        <div className="flex items-center justify-between font-bold">
+                                                            <span className="flex items-center gap-1">
+                                                                <span>{att.is_effective ? '✓' : '✗'}</span>
+                                                                <span>{t('monitor.timing.attempt', '尝试')} {idx + 1} ({att.endpoint_name})</span>
+                                                                {att.is_effective && (
+                                                                    <span className="ml-1 text-[10px] px-1 rounded bg-emerald-500/20 text-emerald-700 dark:text-emerald-300">
+                                                                        {t('monitor.timing.effective_hit', '首包命中')}
+                                                                    </span>
+                                                                )}
+                                                            </span>
+                                                            <span className="font-black">{formatSeconds(att.duration_s)}</span>
+                                                        </div>
+                                                        <div className="text-[10px] text-gray-500 dark:text-gray-400 truncate mt-0.5" title={att.endpoint_url}>
+                                                            端点: {att.endpoint_url}
+                                                        </div>
+                                                        <div className="text-[10px] mt-0.5 flex items-center justify-between text-gray-600 dark:text-gray-300">
+                                                            <span>状态: {att.status ? `${att.status} ${att.is_effective ? 'OK' : ''}` : '网络超时/异常'}</span>
+                                                            {att.error && !att.is_effective && (
+                                                                <span className="text-rose-600 dark:text-rose-400 truncate max-w-[200px]" title={att.error}>
+                                                                    {att.error}
+                                                                </span>
+                                                            )}
+                                                        </div>
+                                                    </div>
+                                                </React.Fragment>
+                                            ))}
+                                        </div>
+                                    )}
                                 </div>
                             );
                         })}

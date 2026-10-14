@@ -1699,6 +1699,7 @@ pub async fn handle_messages(
     let mut norm_ms: f64 = 0.0;
     let mut think_fill_ms: f64 = 0.0;
     let mut ttft_ms: f64 = 0.0;
+    let mut fallback_overhead_ms: f64 = 0.0;
 
     let request_start = tokio::time::Instant::now();
     let global_deadline = request_start
@@ -2000,8 +2001,12 @@ pub async fn handle_messages(
             }
         };
 
+        let effective_attempt_start = call_result.effective_attempt_start;
+        let mut fallback_attempts = call_result.fallback_attempts.clone();
+        fallback_overhead_ms = call_result.fallback_overhead_s() * 1000.0;
+
         // [NEW] 记录端点降级日志到 debug 文件
-        if !call_result.fallback_attempts.is_empty() && debug_logger::is_enabled(&debug_cfg) {
+        if call_result.has_fallback() && debug_logger::is_enabled(&debug_cfg) {
             let fallback_entries: Vec<Value> = call_result
                 .fallback_attempts
                 .iter()
@@ -2118,7 +2123,15 @@ pub async fn handle_messages(
                 // 并由 stream_lifecycle 驱动器每 3 秒实时下发官方 SSE ping 心跳 (`event: ping\ndata: {"type": "ping"}\n\n`)。
                 // 这确保下游客户端（Claude Code 等）看门狗持续被心跳保活，绝不会因 Prefill 或推理思考等待触发 5 分钟无响应断连 (CLI error 'Request timed out')。
                 if client_wants_stream {
-                    ttft_ms = upstream_req_start.elapsed().as_micros() as f64 / 1000.0;
+                    ttft_ms = effective_attempt_start.elapsed().as_micros() as f64 / 1000.0;
+                    if let Some(effective_item) =
+                        fallback_attempts.iter_mut().find(|a| a.is_effective)
+                    {
+                        effective_item.duration_s = ttft_ms / 1000.0;
+                    }
+                    let _ = crate::proxy::monitor::CURRENT_UPSTREAM_CAPTURE.try_with(|holder| {
+                        holder.set_attempts(fallback_attempts.clone());
+                    });
                     let in_flight_guard_for_stream = Arc::clone(&in_flight_guard);
                     let stream_mapped =
                         claude_stream.map(move |result| -> Result<Bytes, std::io::Error> {
@@ -2147,6 +2160,10 @@ pub async fn handle_messages(
                         .header("X-Timing-Norm-Ms", format!("{:.3}", norm_ms))
                         .header("X-Timing-Thinking-Ms", format!("{:.3}", think_fill_ms))
                         .header("X-Timing-Ttft-Ms", format!("{:.3}", ttft_ms))
+                        .header(
+                            "X-Timing-Ttft-Overhead-Ms",
+                            format!("{:.3}", fallback_overhead_ms),
+                        )
                         .body(Body::from_stream(stream_mapped))
                         .unwrap();
                 }
@@ -2221,7 +2238,17 @@ pub async fn handle_messages(
                             }
 
                             // We found real data!
-                            ttft_ms = upstream_req_start.elapsed().as_micros() as f64 / 1000.0;
+                            ttft_ms = effective_attempt_start.elapsed().as_micros() as f64 / 1000.0;
+                            if let Some(effective_item) =
+                                fallback_attempts.iter_mut().find(|a| a.is_effective)
+                            {
+                                effective_item.duration_s = ttft_ms / 1000.0;
+                            }
+                            let _ = crate::proxy::monitor::CURRENT_UPSTREAM_CAPTURE.try_with(
+                                |holder| {
+                                    holder.set_attempts(fallback_attempts.clone());
+                                },
+                            );
                             first_data_chunk = Some(bytes);
                             break;
                         }
@@ -2297,6 +2324,10 @@ pub async fn handle_messages(
                                     .header("X-Timing-Norm-Ms", format!("{:.3}", norm_ms))
                                     .header("X-Timing-Thinking-Ms", format!("{:.3}", think_fill_ms))
                                     .header("X-Timing-Ttft-Ms", format!("{:.3}", ttft_ms))
+                                    .header(
+                                        "X-Timing-Ttft-Overhead-Ms",
+                                        format!("{:.3}", fallback_overhead_ms),
+                                    )
                                     .body(Body::from(
                                         serde_json::to_string(&full_response).unwrap(),
                                     ))
