@@ -455,6 +455,7 @@ fn consolidate_non_streaming_response(
     raw_json: &Value,
     log: &ProxyRequestLog,
     headers_map: &serde_json::Map<String, Value>,
+    upstream_attempts: Option<Vec<crate::proxy::upstream::client::FallbackAttemptLog>>,
 ) -> Option<Value> {
     // 若本就已是统一的 consolidated 格式 (例如带有顶层 thinking/tool_calls 且无 choices/candidates)，直接返回 None
     if (raw_json.get("thinking").is_some()
@@ -667,12 +668,7 @@ fn consolidate_non_streaming_response(
         }
     }
 
-    let attempts_opt = crate::proxy::monitor::CURRENT_UPSTREAM_CAPTURE
-        .try_with(|holder| holder.take_attempts())
-        .ok()
-        .flatten();
-
-    if let Some(attempts) = attempts_opt {
+    if let Some(attempts) = upstream_attempts {
         if !attempts.is_empty() {
             timing_obj.insert(
                 "ttft_attempts".to_string(),
@@ -882,6 +878,7 @@ pub async fn monitor_middleware(
         .await;
     let upstream_request_body = upstream_holder.take();
     let upstream_request_headers = upstream_holder.take_headers();
+    let upstream_attempts = upstream_holder.take_attempts();
     let response_headers_json =
         crate::proxy::payload_audit::headers_to_redacted_json(response.headers());
 
@@ -990,6 +987,7 @@ pub async fn monitor_middleware(
         let mut stream = body.into_data_stream();
         let (tx, rx) = tokio::sync::mpsc::channel(64);
         let start_instant = start;
+        let attempts_for_stream = upstream_attempts.clone();
 
         tokio::spawn(async move {
             let stream_start = std::time::Instant::now();
@@ -1449,12 +1447,7 @@ pub async fn monitor_middleware(
                     }
                 }
 
-                let attempts_opt = crate::proxy::monitor::CURRENT_UPSTREAM_CAPTURE
-                    .try_with(|holder| holder.take_attempts())
-                    .ok()
-                    .flatten();
-
-                if let Some(attempts) = attempts_opt {
+                if let Some(attempts) = attempts_for_stream {
                     if !attempts.is_empty() {
                         timing_obj.insert(
                             "ttft_attempts".to_string(),
@@ -1707,9 +1700,12 @@ pub async fn monitor_middleware(
                             .or_else(|| Some(s.to_string()));
                     } else if let Ok(json) = serde_json::from_str::<Value>(&s) {
                         // 🌟 非流式响应入库统一转换为满血简要版 (包含网关权威签名回填与防雪崩确定性 Tool ID)
-                        if let Some(canonical) =
-                            consolidate_non_streaming_response(&json, &log, &headers_map)
-                        {
+                        if let Some(canonical) = consolidate_non_streaming_response(
+                            &json,
+                            &log,
+                            &headers_map,
+                            upstream_attempts.clone(),
+                        ) {
                             log.response_body = serde_json::to_string_pretty(&canonical)
                                 .ok()
                                 .or_else(|| Some(s.to_string()));

@@ -1724,6 +1724,7 @@
             "fallback_overhead": "Fallback 降级损耗",
             "fallback_overhead_desc": "端点故障超时转移与切换延迟开销",
             "fallback_badge": "已降级",
+            "direct_badge": "直连",
             "switch_delay": "Fallback 切换延迟",
             "attempt": "尝试",
             "effective_hit": "首包命中",

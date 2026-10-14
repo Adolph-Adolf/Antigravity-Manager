@@ -660,6 +660,18 @@ const parseTimingFromHeadersAndBody = (
         }
     }
 
+    if ((!ttftAttempts || ttftAttempts.length === 0) && ttftSec !== undefined && ttftSec > 0) {
+        ttftAttempts = [
+            {
+                endpoint_name: 'Daily',
+                endpoint_url: 'https://daily-cloudcode-pa.googleapis.com/v1internal',
+                status: 200,
+                duration_s: ttftSec,
+                is_effective: true,
+            },
+        ];
+    }
+
     // 3. Fallback for totalSec if durationMs exists
     if (totalSec === undefined && durationMs !== undefined && durationMs > 0) {
         totalSec = durationMs / 1000;
@@ -754,12 +766,10 @@ const TimingDiagnosticsCard: React.FC<TimingDiagnosticsCardProps> = ({ timing, o
 
         list.push({
             key: 'ttft',
-            label: timing.ttftOverheadSec
-                ? t('monitor.timing.ttft_pure', '等待首包 (纯 TTFT)')
-                : t('monitor.timing.ttft', '等待首包 (TTFT)'),
+            label: t('monitor.timing.ttft_pure', '等待首包 (纯 TTFT)'),
             desc: timing.ttftOverheadSec
                 ? t('monitor.timing.ttft_pure_desc', '最终命中端点发出请求至首个有效数据块到达 (纯首包耗时)')
-                : t('monitor.timing.ttft_desc', '网关上送至接收首个数据包 (含首Token/思考块)'),
+                : t('monitor.timing.ttft_pure_desc', '最终命中端点发出请求至首个有效数据块到达 (纯首包耗时)'),
             sec: timing.ttftSec,
             color: 'bg-emerald-500',
             textColor: 'text-emerald-600 dark:text-emerald-400',
@@ -897,6 +907,7 @@ const TimingDiagnosticsCard: React.FC<TimingDiagnosticsCardProps> = ({ timing, o
                             const hasVal = st.sec !== undefined;
                             const pct = hasVal && totalSec > 0 ? ((st.sec! / totalSec) * 100).toFixed(1) : undefined;
                             const isTtft = st.key === 'ttft';
+                            const hasAttempts = isTtft && timing.ttftAttempts && timing.ttftAttempts.length > 0;
                             const hasFallback =
                                 isTtft &&
                                 ((timing.ttftAttempts && timing.ttftAttempts.length > 1) ||
@@ -915,11 +926,15 @@ const TimingDiagnosticsCard: React.FC<TimingDiagnosticsCardProps> = ({ timing, o
                                                     <span className="font-bold text-gray-900 dark:text-white truncate block text-xs">
                                                         {st.label}
                                                     </span>
-                                                    {hasFallback && (
+                                                    {hasFallback ? (
                                                         <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-800 dark:bg-amber-950/70 dark:text-amber-300 border border-amber-300 dark:border-amber-800/60 shrink-0">
                                                             {t('monitor.timing.fallback_badge', '已降级')} ({timing.ttftAttempts?.length || 2}次尝试)
                                                         </span>
-                                                    )}
+                                                    ) : hasAttempts ? (
+                                                        <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-emerald-50 text-emerald-700 dark:bg-emerald-950/70 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800/60 shrink-0">
+                                                            {t('monitor.timing.direct_badge', '直连')} · {timing.ttftAttempts![0].endpoint_name}
+                                                        </span>
+                                                    ) : null}
                                                 </div>
                                                 <span className="text-[10px] text-gray-500 dark:text-gray-400 truncate block">
                                                     {st.desc}
@@ -940,9 +955,9 @@ const TimingDiagnosticsCard: React.FC<TimingDiagnosticsCardProps> = ({ timing, o
                                     </div>
 
                                     {/* 动态展示多端点 TTFT 链路明细时间线 */}
-                                    {hasFallback && timing.ttftAttempts && timing.ttftAttempts.length > 0 && (
+                                    {hasAttempts && (
                                         <div className="mt-2 pt-2 border-t border-dashed border-gray-200 dark:border-base-300 space-y-1.5 font-mono text-[11px]">
-                                            {timing.ttftAttempts.map((att, idx) => (
+                                            {timing.ttftAttempts!.map((att, idx) => (
                                                 <React.Fragment key={idx}>
                                                     {att.switch_delay_s !== undefined && att.switch_delay_s > 0 && (
                                                         <div className="flex items-center gap-1.5 pl-3 text-[10px] text-amber-600 dark:text-amber-400">

@@ -1730,6 +1730,7 @@
             "fallback_overhead": "Fallback Overhead",
             "fallback_overhead_desc": "Timeout, retry, and switch latency across failed endpoints",
             "fallback_badge": "Degraded",
+            "direct_badge": "Direct",
             "switch_delay": "Fallback Switch Latency",
             "attempt": "Attempt",
             "effective_hit": "First Token Hit",
