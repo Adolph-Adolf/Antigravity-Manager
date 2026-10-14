@@ -378,6 +378,28 @@ pub fn is_bare_gemini_v36_or_above_flash(model: &str) -> bool {
     is_bare_gemini_v3_flash(model)
 }
 
+/// 检查是否为 Gemini >= 4.0 系列新一代高级模型（例如 gemini-4-argon-* 等）
+pub fn is_gemini_v4_or_above(model: &str) -> bool {
+    let lower = model.to_lowercase();
+    if lower.contains("argon") {
+        return true;
+    }
+    if !lower.contains("gemini") {
+        return false;
+    }
+    if let Some(idx) = lower.find("gemini-") {
+        let rest = &lower[idx + "gemini-".len()..];
+        let version_part: String = rest
+            .chars()
+            .take_while(|c| c.is_ascii_digit() || *c == '.')
+            .collect();
+        if let Ok(ver) = version_part.parse::<f32>() {
+            return ver >= 4.0;
+        }
+    }
+    lower.contains("gemini-4")
+}
+
 /// 检查是否为 Claude >= 5.0 版本模型（含裸模型与档位变体）
 pub fn is_claude_v5_or_above(model: &str) -> bool {
     let lower = model.to_lowercase();

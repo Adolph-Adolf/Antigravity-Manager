@@ -2297,14 +2297,14 @@ impl TokenManager {
             return Err("Token pool is empty".to_string());
         }
 
-        // [NEW] 1. 动态能力过滤 (Capability Filter)
-
-        // 针对 Claude >= 5.0 系列高级模型（例如 5.5 Sonnet / 5.5 Opus 等）：
+        // [NEW] 1. 动态能力过滤 (Capability-First Dynamic Filter)
+        // 针对 Claude >= 5.0 以及 Gemini >= 4.0 (Argon) 等新一代高阶灰度模型：
         // 优先使用账号上游下发的配额模型目录 (model_limits / model_quotas) 进行动态能力判断；
-        // 当存在明确具备该模型能力的账号时，严格只保留具备能力的账号。
-        // 若所有账号皆尚未拉取到明确的模型目录（例如冷启动或离线），则平滑降级为 PRO / ULTRA 订阅层门禁兜底。
-        let is_advanced_claude = crate::proxy::model_specs::is_claude_v5_or_above(target_model);
-        if is_advanced_claude {
+        // 当存在明确具备该模型能力的账号时，严格只保留具备能力的账号（例如仅开放给 ULTRA 时，严格只路由给 ULTRA）；
+        // 若所有账号皆尚未拉取到明确的模型目录（例如冷启动尚未刷新），则平滑降级为 PRO / ULTRA 订阅资质门禁兜底。
+        let is_advanced_canary = crate::proxy::model_specs::is_claude_v5_or_above(target_model)
+            || crate::proxy::model_specs::is_gemini_v4_or_above(target_model);
+        if is_advanced_canary {
             let before_tier = tokens_snapshot.len();
 
             // 1.1 先行保留符合基本高级订阅资质的账号 (PRO / ULTRA)
@@ -2320,17 +2320,18 @@ impl TokenManager {
             if tokens_snapshot.is_empty() {
                 if before_tier > 0 {
                     tracing::warn!(
-                        "Claude >= 5.0 requires PRO or ULTRA subscription, but no PRO/ULTRA accounts available in pool"
+                        "Model {} requires PRO or ULTRA subscription, but no PRO/ULTRA accounts available in pool",
+                        target_model
                     );
-                    return Err(
-                        "Claude >= 5.0 requires PRO or ULTRA subscription, but no PRO/ULTRA accounts are available"
-                            .to_string(),
-                    );
+                    return Err(format!(
+                        "Model {} requires PRO or ULTRA subscription, but no PRO/ULTRA accounts are available",
+                        target_model
+                    ));
                 }
                 return Err("Token pool is empty".to_string());
             }
 
-            // 1.2 动态能力过滤：检测是否有账号已通过定时刷新/在线同步获得了该 5.x 模型的实际可用配额
+            // 1.2 动态能力过滤：检测是否有账号已通过定时刷新/在线同步获得了该高阶模型的实际可用配额
             // 同时必须排除因历史 404/403 处于临时单模型熔断期的账号
             let accounts_with_capability: Vec<_> = tokens_snapshot
                 .iter()
@@ -2342,7 +2343,8 @@ impl TokenManager {
                 .collect();
 
             if !accounts_with_capability.is_empty() {
-                // 池中已有明确支持该模型的账号，精准收敛候选池至具备能力的账号集合
+                // 池中已有明确支持该模型的账号，精准收敛候选池至具备真实能力的账号集合
+                // 彻底杜绝将请求路由到未开通的高阶模型账号！
                 tokens_snapshot = accounts_with_capability;
             } else {
                 // 池中所有账号的 model_limits 均未显式出现该模型（可能冷启动尚未完成配额刷新或上游合并至统一番号）
@@ -2399,8 +2401,8 @@ impl TokenManager {
                 return priority_cmp;
             }
 
-            // 对于 Claude >= 5.0：明确包含该具体模型（由定时刷新下发）的账号获得最高调度优先级
-            if is_advanced_claude {
+            // 对于高阶灰度模型 (Claude >= 5.0, Gemini >= 4.0 Argon 等)：明确包含该具体模型（由定时刷新下发）的账号获得最高调度优先级
+            if is_advanced_canary {
                 let has_cap_a = Self::token_supports_advanced_model(a, target_model);
                 let has_cap_b = Self::token_supports_advanced_model(b, target_model);
                 if has_cap_a != has_cap_b {

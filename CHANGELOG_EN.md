@@ -16,7 +16,10 @@
             -   **Configurable Spillover Account Cap (max_spillover_accounts)**: Added support for capping the maximum number of distinct accounts concurrently engaged (0 for unlimited; N > 0 caps active accounts to N), with interactive slider controls and full translations in the Proxy Scheduling Settings UI. (PR #3662, Thanks to @zepeng-jin)
         -   **[High-Resolution Minute-Level Token Analytics & Granular Trends] (PR #3663, Thanks to @zepeng-jin)**:
             -   **Backend Minute Aggregation Endpoints**: Introduced `get_minute_stats`, `get_model_trend_minute`, and `get_account_trend_minute` in `token_stats.rs`, aggregating usage by minute timestamp (`%Y-%m-%d %H:%M`) across 1h and 24h spans via Tauri IPC commands. (PR #3663, Thanks to @zepeng-jin)
-            -   **Frontend Multi-View Adaptation**: Extended `TimeRange` to support `'minute'` with responsive 1h / 24h pill selectors, adapted X-axis tick formatters (`HH:mm`) across both `AppleBentoView` and `CyberCockpitView`, and synchronized complete English and Chinese locale dictionaries. (PR #3663, Thanks to @zepeng-jin)
+        -   **[Official Deprecated Model Interface Alignment, Gemini 4 Argon Support & Dynamic Capability Filtering]**:
+            -   **Automated Deprecated Model Pruning**: Upgraded `useProxyModels` to dynamically inspect account `model_forwarding_rules` (from Google `deprecatedModelIds`), automatically pruning deprecated and redirected model aliases from client UI.
+            -   **Active Family Baseline Convergence**: Automatically pruned obsolete transitional sub-versions (3.5, 3.6, 3.7) when a higher active minor version like `gemini-3.8-flash` is present in the account pool, keeping supported model listings sleek; added forward-looking high-contrast icons and groups for Gemini 4 Argon.
+            -   **Capability-First Dynamic Scheduling for Gemini 4 Argon & Claude 5.x**: Generalized dynamic capability detection in `model_specs.rs` and `token_manager.rs` to strictly route requests only to accounts reporting active model capabilities in `model_quotas` / `model_limits`, eliminating accidental routing of canary models to ungranted accounts.
 
     *   **v4.9.7-beta.10 (2026-10-13)**:
         -   **[Restrict Internal Warmup Endpoint to Direct Loopback Only] (PR #3660, Fixes #3659, Thanks to @Quirrel-zh)**:

@@ -16,7 +16,10 @@
             -   **可配置溢出账号上限 (max_spillover_accounts)**: 支持设置并发调度时参与外溢的最大账号数（默认 0 为不限制；N > 0 时最多允许 N 个账号同时参与调度），防止无节制激活过多账号，并在 UI 调度设置面板提供滑动条调节与多语言支持。 (PR #3662, Thanks to @zepeng-jin)
         -   **[支持分钟级高分辨率 Token 统计与细粒度趋势展示] (PR #3663, Thanks to @zepeng-jin)**:
             -   **后端分钟级聚合接口**: 在 `token_stats.rs` 中新增 `get_minute_stats`、`get_model_trend_minute` 与 `get_account_trend_minute`，按分钟粒度（`%Y-%m-%d %H:%M`）精准聚合 Token 消耗，支持 1h 与 24h 时间跨度并通过 Tauri IPC 命令暴露。 (PR #3663, Thanks to @zepeng-jin)
-            -   **前端图表分钟粒度多视图适配**: 在 Token 统计页面扩展 `TimeRange` 支持 `'minute'`，提供 1h / 24h 药丸选择器，在 `AppleBentoView` 与 `CyberCockpitView` 中适配 X 轴 `HH:mm` 刻度展示，并同步完整中英文语言包。 (PR #3663, Thanks to @zepeng-jin)
+        -   **[官方废弃模型接口自动对齐、Gemini 4 Argon 支持与高阶灰度动态能力自适应收敛]**:
+            -   **废弃模型接口自动感知与淘汰**: 前端 `useProxyModels` 自动读取全账号 `model_forwarding_rules`（官方上游 `deprecatedModelIds`），自动淘汰被上游废弃并重定向的老旧模型条目。
+            -   **家族活跃基准线动态剪枝**: 当账号池中存在 `gemini-3.8-flash` 等更高小版本时，自动过滤历史过渡小版本（3.5、3.6、3.7），保持支持模型列表极简清爽；并为新一代 Gemini 4 (Argon) 预置高质感品牌图标与分组。
+            -   **Gemini 4 Argon 与 Claude 5.x 动态能力过滤 (Capability-First)**: 在 `model_specs.rs` 与 `token_manager.rs` 中将高阶灰度模型纳入动态能力收敛体系，100% 依据各账号实际返回的配额与模型能力目录（`model_quotas` / `model_limits`）自适应调度，彻底杜绝高阶模型误路由至未获上游授权的账号。
 
     *   **v4.9.7-beta.10 (2026-10-13)**:
         -   **[收紧内部预热端点为仅限本机回环访问] (PR #3660, Fixes #3659, Thanks to @Quirrel-zh)**:
