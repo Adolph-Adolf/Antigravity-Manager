@@ -3,6 +3,13 @@
 > Complete version history for Antigravity Tools. Return to project home at [README.md](README.md).
 
 *   **Version History**:
+    *   **v4.9.8-beta.1 (2026-10-14)**:
+        -   **[Refactored Column Resize Logic, Fixed Dashboard Dark Mode Card & Hardened Endpoint Tracing]**:
+            -   **Linear Column Resizing & Overflow Isolation**: Completely eliminated the unexpected elastic column expansion side effect in `ProxyMonitor`, switching to deterministic 1:1 drag-to-resize; enforced `table-layout: fixed` with strict `overflow: hidden` across all cells, completely eliminating token usage text overlapping with service accounts.
+            -   **Fixed Inverted Dashboard Health Card Theme**: Corrected the first dashboard card ("Account Base Assets") which incorrectly rendered bright white in dark mode and dark in light mode, restoring full aesthetic consistency.
+            -   **Cross-Task Endpoint Trace Persistence & Unified Panel**: Fixed context loss in monitor middleware for async streaming tasks, ensuring attempts data persists cleanly; upgraded the timing diagnostics card to always render endpoint breakdown panels across both direct hits and fallbacks.
+            -   **Eliminated Release Pipeline Collisions**: Removed tag triggers and added release guards to `build-windows.yml` to prevent unsigned binaries from overwriting official signed assets, permanently resolving "The signature verification failed" update errors.
+
     *   **v4.9.8-beta.0 (2026-10-14)**:
         -   **[Pure Point-to-Point TTFT Latency Decoupling & Dynamic Multi-Endpoint Fallback Trace]**:
             -   **Pure Point-to-Point TTFT Measurement**: Decoupled upstream timeout and retry attempts from first-token metrics. Individual timers are now recorded per endpoint in `UpstreamClient`, measuring pure TTFT strictly from the moment the winning endpoint dispatches until the first valid SSE chunk (thinking/tool/content) arrives.
