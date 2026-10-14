@@ -44,6 +44,11 @@ pub fn get_max_output_tokens(model_id: &str, token: Option<&ProxyToken>) -> u64 
         if let Some(&limit) = t.model_limits.get(model_id) {
             return limit.max(8192);
         }
+        // [NEW] 剥离档位后缀后再次尝试从 model_limits 读取
+        let base = crate::proxy::common::model_mapping::strip_tier_suffix(model_id);
+        if let Some(&limit) = t.model_limits.get(&base) {
+            return limit.max(8192);
+        }
     }
 
     // 2. 回退到静态 JSON
@@ -66,24 +71,26 @@ pub fn get_thinking_budget(model_id: &str, _token: Option<&ProxyToken>) -> u64 {
     let std_id = resolve_alias(model_id);
     let lower = std_id.to_lowercase();
 
-    // 1. 显式档位匹配（支持 Flash / Pro 的 high, medium, low, extra-low, max 等分级）
+    // 1. 显式档位匹配（支持所有模型的通用分级）
+    // 规则：只要不是轻量级（flash/lite），带 high 档位的均按顶级模型赋予思考预算
+    let is_lightweight = lower.contains("flash") || lower.contains("lite");
     if lower.contains("high") || lower.contains("agent") || lower.contains("max") {
-        if lower.contains("pro") {
-            return 10001; // Google 官方 gemini-3.1-pro-high / gemini-pro-agent 规范预算
+        if !is_lightweight {
+            return 10001; // 高级/旗舰模型（Pro / Opus / 新一代代号模型等）满血思考规范预算
         }
-        return 10000; // gemini-3.x-flash-high 满血思考规范预算
+        return 10000; // Flash 等高速轻量模型 high 满血思考规范预算
     }
     if lower.contains("medium") {
-        return 4000; // gemini-3.x-flash-medium 内置逆向规范预算
+        return 4000; // medium 内置逆向规范预算
     }
     if lower.contains("extra-low") {
-        return 1000; // gemini-3.5-flash-extra-low 规范预算
+        return 1000; // extra-low 规范预算
     }
     if lower.contains("low") {
-        if lower.contains("pro") {
-            return 1001; // gemini-3.1-pro-low 规范预算
+        if !is_lightweight {
+            return 1001; // 高级模型 low 规范预算
         }
-        return 1000; // gemini-3.x-flash-low 规范预算
+        return 1000; // flash-low 规范预算
     }
 
     // 2. 静态 JSON 配置 (model_specs.json)
@@ -378,12 +385,9 @@ pub fn is_bare_gemini_v36_or_above_flash(model: &str) -> bool {
     is_bare_gemini_v3_flash(model)
 }
 
-/// 检查是否为 Gemini >= 4.0 系列新一代高级模型（例如 gemini-4-argon-* 等）
+/// 检查是否为 Gemini >= 4.0 系列新一代高级模型（纯数值/语义版本通配，不依赖硬编码代号）
 pub fn is_gemini_v4_or_above(model: &str) -> bool {
     let lower = model.to_lowercase();
-    if lower.contains("argon") {
-        return true;
-    }
     if !lower.contains("gemini") {
         return false;
     }
@@ -397,7 +401,16 @@ pub fn is_gemini_v4_or_above(model: &str) -> bool {
             return ver >= 4.0;
         }
     }
-    lower.contains("gemini-4")
+    // 通配检测：匹配类似 gemini-4、gemini-5 等主版本形态
+    if let Some(idx) = lower.find("gemini-") {
+        let after = &lower[idx + "gemini-".len()..];
+        if let Some(first_char) = after.chars().next() {
+            if let Some(digit) = first_char.to_digit(10) {
+                return digit >= 4;
+            }
+        }
+    }
+    false
 }
 
 /// 检查是否为 Claude >= 5.0 版本模型（含裸模型与档位变体）

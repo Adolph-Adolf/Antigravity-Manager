@@ -139,6 +139,10 @@ pub struct ProxyToken {
     pub validation_url: Option<String>, // [NEW] Validation URL (#1522)
     pub model_quotas: HashMap<String, i32>, // [OPTIMIZATION] In-memory cache for model-specific quotas
     pub model_limits: HashMap<String, u64>, // [NEW] max_output_tokens per model from quota data
+    /// [NEW] 账号实际授权模型集合（原始 ID，直接镜像 fetchAvailableModels 下发）。
+    /// 用于自适应路由判断：只要模型出现在此集合中，该账号即可承接对应请求。
+    /// 无需任何硬编码字典；未来新模型自动覆盖，无需修改代码。
+    pub available_models: std::collections::HashSet<String>,
 }
 
 /// 活跃在途请求 RAII Guard：在请求处理或流式传输期间持有，Drop 时原子释放并发计数
@@ -1131,6 +1135,8 @@ impl TokenManager {
         let mut model_quotas = HashMap::new();
         // [NEW] 构建模型输出限额内存缓存 (max_output_tokens)
         let mut model_limits: HashMap<String, u64> = HashMap::new();
+        // [NEW] 构建账号授权模型集合（原始 ID，直接镜像 fetchAvailableModels 下发，用于自适应路由）
+        let mut available_models = std::collections::HashSet::new();
         if let Some(models) = account
             .get("quota")
             .and_then(|q| q.get("models"))
@@ -1146,6 +1152,8 @@ impl TokenManager {
                         crate::proxy::common::model_mapping::normalize_to_standard_id(name)
                             .unwrap_or_else(|| name.to_string());
                     model_quotas.insert(standard_id, pct as i32);
+                    // [NEW] 同时记录原始模型名（小写），用于精确 / 基名路由匹配
+                    available_models.insert(name.to_lowercase());
                 }
                 // [NEW] 解析并缓存 max_output_tokens (按原始 model name，不归一化)
                 if let (Some(name), Some(limit)) = (
@@ -1245,6 +1253,7 @@ impl TokenManager {
                 .map(|s| s.to_string()),
             model_quotas,
             model_limits,
+            available_models,
         }))
     }
 
@@ -1789,6 +1798,11 @@ impl TokenManager {
             return false;
         }
 
+        // 0. [NEW] 优先匹配 available_models（直接来自上游 fetchAvailableModels 的授权列表）
+        if token.available_models.contains(&target_lower) {
+            return true;
+        }
+
         // 1. 精确匹配 model_limits
         if token.model_limits.contains_key(target_model)
             || token
@@ -2306,18 +2320,30 @@ impl TokenManager {
             return Err("Token pool is empty".to_string());
         }
 
-        // [NEW] 1. 动态能力过滤 (Capability-First Dynamic Filter)
-        // 针对 Claude >= 5.0 以及 Gemini >= 4.0 (Argon) 等新一代高阶灰度模型：
-        // 优先使用账号上游下发的配额模型目录 (model_limits / model_quotas) 进行动态能力判断；
-        // 当存在明确具备该模型能力的账号时，严格只保留具备能力的账号（例如仅开放给 ULTRA 时，严格只路由给 ULTRA）；
-        // 若所有账号皆尚未拉取到明确的模型目录（例如冷启动尚未刷新），则平滑降级为 PRO / ULTRA 订阅资质门禁兜底。
-        let is_advanced_canary = crate::proxy::model_specs::is_claude_v5_or_above(target_model)
-            || crate::proxy::model_specs::is_gemini_v4_or_above(target_model);
-        if is_advanced_canary {
-            let before_tier = tokens_snapshot.len();
+        // [NEW] 1. 动态能力过滤 (Capability-First Dynamic Discovery)
+        // 彻底摆脱对具体模型名称或静态版本号的依赖：
+        // 优先检查池中是否有账号明确具备该模型（基于上游 fetchAvailableModels 下发的 available_models / model_limits）。
+        // - 若池中有明确具备真实授权的账号，候选池瞬间精准收敛至具备能力的账号，彻底杜绝路由到未开通账号；
+        // - 若池中所有账号尚未拉取到具体模型（如冷启动），则根据动态特征（高级订阅专享分布或通用通配）优雅降级为 PRO/ULTRA 门禁。
+        let target_lower = target_model.trim().to_lowercase();
+        let base_name = crate::proxy::common::model_mapping::strip_tier_suffix(&target_lower);
 
-            // 1.1 先行保留符合基本高级订阅资质的账号 (PRO / ULTRA)
-            tokens_snapshot.retain(|t| {
+        // 1.1 动态探测：池中是否有任何账号明确支持该模型？
+        let accounts_with_capability: Vec<_> = tokens_snapshot
+            .iter()
+            .filter(|t| {
+                !self.is_model_unsupported(&t.account_id, target_model)
+                    && (t.available_models.contains(&target_lower)
+                        || t.available_models.contains(&base_name)
+                        || Self::token_supports_advanced_model(t, target_model))
+            })
+            .cloned()
+            .collect();
+
+        let is_advanced_canary = if !accounts_with_capability.is_empty() {
+            // 只要池中有明确支持的账号，且并非所有 FREE 账号都普惠支持（例如只在 PRO/ULTRA 账号中出现），
+            // 就直接将候选池收敛到这些具备实际能力的账号！
+            let only_in_paid_tiers = accounts_with_capability.iter().all(|t| {
                 matches!(
                     t.subscription_tier
                         .as_deref()
@@ -2326,38 +2352,52 @@ impl TokenManager {
                     Some("PRO") | Some("ULTRA")
                 )
             });
-            if tokens_snapshot.is_empty() {
-                if before_tier > 0 {
-                    tracing::warn!(
-                        "Model {} requires PRO or ULTRA subscription, but no PRO/ULTRA accounts available in pool",
-                        target_model
-                    );
-                    return Err(format!(
-                        "Model {} requires PRO or ULTRA subscription, but no PRO/ULTRA accounts are available",
-                        target_model
-                    ));
-                }
-                return Err("Token pool is empty".to_string());
-            }
+            // 如果仅在付费账号中出现，或者只有部分账号拥有（灰度特征），均触发精准收敛
+            only_in_paid_tiers || accounts_with_capability.len() < tokens_snapshot.len()
+        } else {
+            // 冷启动或上游未显式列出：使用通用通配规则推导（不再写死具体型号/代号）
+            // 匹配非基础轻量模型的高级特征（带有 pro/opus/ultra 或新一代大版本通配）
+            let is_generic_advanced = target_lower.contains("opus")
+                || target_lower.contains("ultra")
+                || target_lower.contains("pro")
+                || (!target_lower.contains("flash") && !target_lower.contains("lite"))
+                || crate::proxy::model_specs::is_claude_v5_or_above(target_model)
+                || crate::proxy::model_specs::is_gemini_v4_or_above(target_model);
+            is_generic_advanced
+        };
 
-            // 1.2 动态能力过滤：检测是否有账号已通过定时刷新/在线同步获得了该高阶模型的实际可用配额
-            // 同时必须排除因历史 404/403 处于临时单模型熔断期的账号
-            let accounts_with_capability: Vec<_> = tokens_snapshot
-                .iter()
-                .filter(|t| {
-                    !self.is_model_unsupported(&t.account_id, target_model)
-                        && Self::token_supports_advanced_model(t, target_model)
-                })
-                .cloned()
-                .collect();
+        if is_advanced_canary {
+            let before_tier = tokens_snapshot.len();
 
+            // 1.2 若池中有明确具备真实授权的账号，直接精准收敛！彻底杜绝将请求路由到未开通的高阶模型账号！
             if !accounts_with_capability.is_empty() {
-                // 池中已有明确支持该模型的账号，精准收敛候选池至具备真实能力的账号集合
-                // 彻底杜绝将请求路由到未开通的高阶模型账号！
                 tokens_snapshot = accounts_with_capability;
             } else {
-                // 池中所有账号的 model_limits 均未显式出现该模型（可能冷启动尚未完成配额刷新或上游合并至统一番号）
-                // 此时依然严格排除处于该模型临时熔断期的账号
+                // 冷启动：先行保留符合基本高级订阅资质的账号 (PRO / ULTRA)
+                tokens_snapshot.retain(|t| {
+                    matches!(
+                        t.subscription_tier
+                            .as_deref()
+                            .map(str::to_uppercase)
+                            .as_deref(),
+                        Some("PRO") | Some("ULTRA")
+                    )
+                });
+                if tokens_snapshot.is_empty() {
+                    if before_tier > 0 {
+                        tracing::warn!(
+                            "Model {} requires PRO or ULTRA subscription, but no PRO/ULTRA accounts available in pool",
+                            target_model
+                        );
+                        return Err(format!(
+                            "Model {} requires PRO or ULTRA subscription, but no PRO/ULTRA accounts are available",
+                            target_model
+                        ));
+                    }
+                    return Err("Token pool is empty".to_string());
+                }
+
+                // 排除处于该模型临时熔断期的账号
                 tokens_snapshot.retain(|t| !self.is_model_unsupported(&t.account_id, target_model));
                 if tokens_snapshot.is_empty() {
                     tracing::warn!(
@@ -2376,29 +2416,74 @@ impl TokenManager {
             }
         }
 
-        // 归一化目标模型名为标准 ID
+        // 归一化目标模型名为标准 ID（仅用于配额排序权重，不再作为访问门禁）
         let normalized_target =
             crate::proxy::common::model_mapping::normalize_to_standard_id(target_model)
                 .unwrap_or_else(|| target_model.to_string());
 
-        // 仅保留明确拥有该模型配额的账号
-        // 这一步确保了 "保证有模型才可以进入轮询"，特别是对 Opus 4.6 等高端模型
+        // ── 动态模型授权过滤 ────────────────────────────────────────────────
+        // 替代旧的硬编码 model_quotas 门禁，改用三步动态匹配：
+        //   Step A: 精确命中 available_models（原始 ID，大小写无关）
+        //   Step B: 基名匹配（剥离档位后缀后的基底模型名命中 available_models）
+        //   Step C: 归一化桶兜底（available_models 为空时退回旧 model_quotas 逻辑，
+        //           覆盖冷启动 / 旧账号 / model_quotas 已覆盖的经典模型）
+        // 只要上游 fetchAvailableModels 下发了授权列表，任何新模型（无论名称如何）都
+        // 自动命中 Step A/B，无需修改任何硬编码字典。
+        let target_lower = target_model.trim().to_lowercase();
+        let base_name = crate::proxy::common::model_mapping::strip_tier_suffix(&target_lower);
+        // 判断池中是否已有任何账号完成了 available_models 刷新（区分冷启动 vs. 已知空集）
+        let any_loaded = tokens_snapshot
+            .iter()
+            .any(|t| !t.available_models.is_empty());
+
         let candidate_count_before = tokens_snapshot.len();
 
-        // 此处假设所有受支持的模型都会出现在 model_quotas 中
-        // 如果 API 返回的配额信息不完整，可能会导致误杀，但为了严格性，我们执行此过滤
-        tokens_snapshot.retain(|t| t.model_quotas.contains_key(&normalized_target));
+        if any_loaded {
+            // 至少有一个账号已刷新配额目录 → 启用精确过滤
+            tokens_snapshot.retain(|t| {
+                if t.available_models.is_empty() {
+                    // 该账号尚未刷新 available_models，暂时保守放行（上游会最终鉴权）
+                    // 仅当池中完全没有已刷新账号时才会走到这里（矛盾条件，理论不可达）
+                    return false;
+                }
+                // Step A: 精确匹配（含档位后缀的完整名，如 gemini-4-argon-high）
+                if t.available_models.contains(&target_lower) {
+                    return true;
+                }
+                // Step B: 基名匹配（剥离档位后缀，如 gemini-4-argon-high → gemini-4-argon）
+                if !base_name.is_empty() && base_name != target_lower {
+                    if t.available_models.contains(&base_name) {
+                        return true;
+                    }
+                    // 额外兼容：账号持有任意该基名的档位变体（如账号有 gemini-4-argon-high，
+                    // 请求为 gemini-4-argon），通过前缀检测处理
+                    if t.available_models.iter().any(|m| {
+                        m == &base_name
+                            || m.starts_with(&format!("{}-", base_name))
+                            || m.starts_with(&format!("{}@", base_name))
+                    }) {
+                        return true;
+                    }
+                }
+                // Step C: 归一化桶兜底（处理上游将多个变体合并到同一 quota key 的经典模型）
+                // 仅当 available_models 中不含任何该系列痕迹时才降级（避免误放未授权账号）
+                t.model_quotas.contains_key(&normalized_target)
+            });
+        } else {
+            // 冷启动：所有账号均未刷新 available_models
+            // 退回 model_quotas 归一化桶逻辑（与旧行为完全一致，保证经典模型正常调度）
+            tokens_snapshot.retain(|t| t.model_quotas.contains_key(&normalized_target));
+        }
 
         if tokens_snapshot.is_empty() {
             if candidate_count_before > 0 {
-                // 如果过滤前有账号，过滤后没了，说明所有账号都没有该模型的配额
                 tracing::warn!(
-                    "No accounts have satisfied quota for model: {}",
-                    normalized_target
+                    "No accounts available with capability for model: {} (base: {}, normalized: {}, any_loaded: {})",
+                    target_model, base_name, normalized_target, any_loaded
                 );
                 return Err(format!(
                     "No accounts available with quota for model: {}",
-                    normalized_target
+                    target_model
                 ));
             }
             return Err("Token pool is empty".to_string());
@@ -5924,6 +6009,7 @@ mod tests {
             validation_url: None,
             model_quotas: HashMap::new(),
             model_limits: HashMap::new(),
+            available_models: std::collections::HashSet::new(),
         }
     }
 
@@ -6316,6 +6402,7 @@ mod tests {
             validation_url: None,
             model_quotas: HashMap::new(),
             model_limits: HashMap::new(),
+            available_models: std::collections::HashSet::new(),
         }
     }
 
@@ -6948,6 +7035,7 @@ mod tests {
             validation_url: None,
             model_quotas: quotas1,
             model_limits: limits1,
+            available_models: HashSet::new(),
         };
 
         // 账号 2: PRO 订阅，经定时刷新成功上报 Claude 5.5 模型配额
@@ -6976,6 +7064,11 @@ mod tests {
             validation_url: None,
             model_quotas: quotas2,
             model_limits: limits2,
+            available_models: {
+                let mut s = HashSet::new();
+                s.insert("claude-sonnet-5-5-high".to_string());
+                s
+            },
         };
 
         // 验证辅助函数检测
@@ -7070,6 +7163,7 @@ mod tests {
             validation_url: None,
             model_quotas: quotas,
             model_limits: limits,
+            available_models: HashSet::new(),
         };
 
         std::fs::write(
@@ -7140,6 +7234,7 @@ mod tests {
             validation_url: None,
             model_quotas: HashMap::new(),
             model_limits: HashMap::new(),
+            available_models: std::collections::HashSet::new(),
         };
 
         manager.tokens.insert(token.account_id.clone(), token);

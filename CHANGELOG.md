@@ -3,6 +3,17 @@
 > 完整版本历史记录。返回项目主页请查看 [README_ZH.md](README_ZH.md) | [English Changelog](CHANGELOG_EN.md)。
 
 *   **版本演进**:
+    *   **v4.9.8-beta.2 (2026-10-14)**:
+        -   **[全面接入 fetchAvailableModels 动态目录、彻底清理静态模型硬编码与新模型自适应支持] (Ref #3665)**:
+            -   **原生授权模型集合 (available_models)**: 在 `ProxyToken` 中新增 `available_models: HashSet<String>`，直接镜像 Google 上游 `fetchAvailableModels` 实时下发的授权列表。作为账号模型能力的唯一权威来源，实现模型全生命周期自适应判定。 (Ref #3665)
+            -   **废除静态门禁与三步自适应匹配**: 彻底废除旧的 `model_quotas.contains_key(normalized)` 一票否决门禁，重构为动态三步匹配（Step A 精确匹配完整模型 ID、Step B 基于 `strip_tier_suffix` 剥离 `-high`/`-medium`/`-low` 档位后缀后匹配基名变体、Step C 仅在所有账号尚未刷新的冷启动期退回通用通配），彻底杜绝由于本地字典未登记新模型导致的误杀报错。 (Ref #3665)
+            -   **清理 CLAUDE_TO_GEMINI 冗余自映射**: 移除 `CLAUDE_TO_GEMINI` 映射表中所有 `gemini-*` 与 `claude-*` 原生模型的自映射条目，全面由动态透传分支与 `DYNAMIC_MODEL_FORWARDING_RULES` 原生接管；仅保留跨供应商别名（如 `gpt-*`）及必要的已下线版本平滑降级。 (Ref #3665)
+            -   **彻底移除特定模型代号 (argon) 硬编码**: 将 `model_specs.rs` 的 `is_gemini_v4_or_above` 重构为通用的纯数值语义版本解析（`gemini-[4-9]`、`>= 4.0`），彻底移除了对代号 `"argon"` 的硬编码判断；思考预算 `get_thinking_budget` 与 Token 限额 `get_max_output_tokens` 升级为通用分档推导与基名动态回退，未来 Google 推出任意新模型（无论名称如何）均能零代码修改自适应调度。 (Ref #3665)
+        -   **[引入濒危额度过滤消除假性 429 报错与补齐客户端断流终结契约] (PR #3666, Fixes #429, Fixes #458, Fixes #3635, Fixes #3661, Ref #3626, Ref #3639, Thanks to @cubelikeplayDaniel)**:
+            -   **濒危额度提权剥离 (IMMINENT_QUOTA_FLOOR)**: 在 EDF（最早截止时间优先）与 P2C 调度算法中，将剩余配额 `<= 10%` 的濒危账号强制剥离临期截止时间提权，严格按额度绝对值降级排序；彻底根除仅剩 1%~2% 极低额度账号因临期被排在队首、请求打过去瞬间耗尽配额触发 429 并击穿自适应重试容错导致误报 `RESOURCE_EXHAUSTED` 的缺陷。 (PR #3666, Fixes #3661, Thanks to @cubelikeplayDaniel)
+            -   **反代开关实体文件与索引原子同步**: 彻底重构 `toggle_proxy_status`，统一由 `modules::account` 在 `ACCOUNT_INDEX_LOCK` 排他锁保护下原子同步账号实体文件与 `accounts.json` 索引，杜绝单向覆写引发的状态持久化漂移。 (PR #3666, Thanks to @cubelikeplayDaniel)
+            -   **黄金三元组终结契约与断流 Token 保全**: 在 `stream_lifecycle.rs` 统一流生命周期中增加内容产出检测（`has_content()`）；长思考或深度推理中途遭遇网络抖动或空闲超时时，网关优雅补发 `content_block_stop`、`message_delta(stop_reason: end_turn)` 和 `message_stop` 黄金三元组终结序列，满足 Claude Code 等终端客户端完成态契约，激活客户端 `keepPartial` 原生保全机制，彻底杜绝丢弃已生成 Token 与无限重新思考死循环。 (PR #3666, Fixes #429, Fixes #458, Fixes #3635, Thanks to @cubelikeplayDaniel)
+
     *   **v4.9.8-beta.1 (2026-10-14)**:
         -   **[重构日志表格列宽拖拽逻辑、修复卡片亮暗颠倒与保障端点链路持久化]**:
             -   **重构日志表格列宽拖拽与消除文字穿透**: 彻底移除后台篡改列宽的副作用逻辑，重写 1:1 单向线性拖拽算法；设置科学默认列宽与最小保护宽，强化 `table-layout: fixed` 与各单元格 `overflow: hidden`，彻底解决 Token 消耗与账号文字交叠遮盖、标题被压扁的问题。

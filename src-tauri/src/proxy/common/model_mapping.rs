@@ -20,12 +20,10 @@ pub fn update_dynamic_forwarding_rules(old_model: String, new_model: String) {
 static CLAUDE_TO_GEMINI: Lazy<HashMap<&'static str, &'static str>> = Lazy::new(|| {
     let mut m = HashMap::new();
 
-    // ── Claude 系列核心标准映射 (基准线 >= 4.6) ──
-    m.insert("claude-sonnet-4-6", "claude-sonnet-4-6");
+    // ── Claude 别名/思考变体重定向 ──
     m.insert("claude-sonnet-4-6-thinking", "claude-sonnet-4-6");
     m.insert("claude-opus-4-6", "claude-opus-4-6-thinking");
-    m.insert("claude-opus-4-6-thinking", "claude-opus-4-6-thinking");
-    // 兼容历史老旧 Claude 模型重定向至 4.6
+    // 历史老旧 Claude 模型重定向至基准版本
     m.insert("claude-sonnet-4-5", "claude-sonnet-4-6");
     m.insert("claude-sonnet-4-5-thinking", "claude-sonnet-4-6");
     m.insert("claude-opus-4-5-thinking", "claude-opus-4-6-thinking");
@@ -36,49 +34,22 @@ static CLAUDE_TO_GEMINI: Lazy<HashMap<&'static str, &'static str>> = Lazy::new(|
     m.insert("claude-3-7-sonnet", "claude-sonnet-4-6");
     m.insert("claude-3-7-sonnet-latest", "claude-sonnet-4-6");
 
-    // ── OpenAI 核心映射 (转至当前基准模型) ──
-    m.insert("gpt-oss-120b-medium", "gpt-oss-120b-medium");
+    // ── OpenAI 别名重定向（映射到 Gemini 高速/主力模型） ──
     m.insert("gpt-4o", "gemini-3.8-flash-high");
     m.insert("gpt-4o-mini", "gemini-3.8-flash-high");
     m.insert("gpt-4-turbo", "gemini-3.8-flash-high");
     m.insert("gpt-4", "gemini-3.8-flash-high");
     m.insert("gpt-3.5-turbo", "gemini-3.6-flash-medium");
 
-    // ── Gemini 核心标准映射 ──
-    m.insert("gemini-3.8-flash-tiered", "gemini-3.8-flash-tiered");
-    m.insert("gemini-3.8-flash-high", "gemini-3.8-flash-high");
-    m.insert("gemini-3.8-flash-medium", "gemini-3.8-flash-medium");
-    m.insert("gemini-3.8-flash-low", "gemini-3.8-flash-low");
-
-    m.insert("gemini-3.7-flash-tiered", "gemini-3.7-flash-tiered");
-    m.insert("gemini-3.7-flash-high", "gemini-3.7-flash-high");
-    m.insert("gemini-3.7-flash-medium", "gemini-3.7-flash-medium");
-    m.insert("gemini-3.7-flash-low", "gemini-3.7-flash-low");
-
-    m.insert("gemini-3.6-flash-tiered", "gemini-3.6-flash-tiered");
-    m.insert("gemini-3.6-flash-high", "gemini-3.6-flash-high");
-    m.insert("gemini-3.6-flash-medium", "gemini-3.6-flash-medium");
-    m.insert("gemini-3.6-flash-low", "gemini-3.6-flash-low");
-
-    m.insert("gemini-3.5-flash", "gemini-3.5-flash");
-    m.insert("gemini-3.5-flash-low", "gemini-3.5-flash-low");
-    m.insert("gemini-3.5-flash-extra-low", "gemini-3.5-flash-extra-low");
-
-    // 下游公开名。generate 只接受内部 id：high → gemini-pro-agent，low 保持 gemini-3.1-pro-low。
-    // 不要登记反向规则（gemini-pro-agent → gemini-3.1-pro-high），否则会覆盖 Variant 的真实 id。
+    // ── Gemini 内部 ID 映射与淘汰模型平滑重定向 ──
+    // 下游公开名。Google generate 内部只接受 agent 协议 id：high → gemini-pro-agent
     m.insert("gemini-3.1-pro-high", "gemini-pro-agent");
-    m.insert("gemini-3.1-pro-low", "gemini-3.1-pro-low");
     m.insert("gemini-3.1-pro", "gemini-pro-agent");
     m.insert("gemini-3.1-pro-preview", "gemini-pro-agent");
     m.insert("gemini-3-pro-high", "gemini-pro-agent");
-    m.insert("gemini-3-pro-low", "gemini-3.1-pro-low");
     m.insert("gemini-3-pro", "gemini-pro-agent");
 
-    m.insert("gemini-3.1-flash-lite", "gemini-3.1-flash-lite");
-    m.insert("gemini-3.1-flash-image", "gemini-3.1-flash-image");
-    m.insert("gemini-3-pro-image", "gemini-3-pro-image");
-
-    // 历史淘汰模型重定向。保留旧版请求兼容性，平滑路由到新版健康模型。gemini-3-flash-agent 是 3.5 Flash high 的真实上游 id，保持透传。
+    // 历史已下线版本平滑降级至健康新模型
     m.insert("gemini-3-flash", "gemini-3.8-flash-high");
     m.insert("gemini-1.5-pro", "gemini-pro-agent");
     m.insert("gemini-2.0-pro", "gemini-pro-agent");
@@ -89,6 +60,9 @@ static CLAUDE_TO_GEMINI: Lazy<HashMap<&'static str, &'static str>> = Lazy::new(|
     m.insert("gemini-2.5-flash-thinking", "gemini-3.6-flash-medium");
     m.insert("gemini-2.5-flash-lite", "gemini-3.1-flash-lite");
     m.insert("gemini-3.5-flash-lite", "gemini-3.1-flash-lite");
+
+    // 提示：所有未在此表列出的 Gemini / Claude 原生模型（如 gemini-4-argon-*、claude-sonnet-5-5-*、
+    // 未来任意新模型）均由动态透传分支与 DYNAMIC_MODEL_FORWARDING_RULES 原生支持，无需在此登记。
 
     m
 });
@@ -200,6 +174,11 @@ fn legacy_claude_family_target(id: &str) -> Option<&'static str> {
 /// 3. **[NEW] 直接透传**: 未知模型 ID 直接传递给 Google API (支持体验未发布模型)
 pub fn map_claude_model_to_gemini(input: &str) -> String {
     let canonical = canonicalize_claude_client_model_id(input);
+
+    // 0. [NEW] 优先匹配上游返回的动态模型转发表 (来自 fetchAvailableModels 下发的 model_forwarding_rules)
+    if let Some(mapped) = DYNAMIC_MODEL_FORWARDING_RULES.get(canonical.as_str()) {
+        return mapped.value().clone();
+    }
 
     // 1. 精确匹配标准映射表
     if let Some(mapped) = CLAUDE_TO_GEMINI.get(canonical.as_str()) {
@@ -781,6 +760,38 @@ fn is_high_tier_flash(lower: &str) -> bool {
     false
 }
 
+/// 通用档位后缀剥离：从模型 ID 末尾去掉已知的思考档位/变体后缀，返回基底模型名。
+///
+/// 设计原则：只剥离最外层一个后缀（避免误切），大小写不敏感，不依赖任何硬编码模型名称。
+///
+/// 示例：
+/// - `gemini-4-argon-high`        → `gemini-4-argon`
+/// - `claude-sonnet-5-5-medium`   → `claude-sonnet-5-5`
+/// - `gemini-3.8-flash-tiered`    → `gemini-3.8-flash`
+/// - `gemini-3-flash-agent`       → `gemini-3-flash-agent`（无匹配后缀，原样返回）
+/// - `some-model@default`         → `some-model`
+pub fn strip_tier_suffix(model: &str) -> String {
+    const TIER_SUFFIXES: &[&str] = &[
+        "-extra-low",
+        "-xhigh",
+        "-high",
+        "-medium",
+        "-low",
+        "-thinking",
+        "-tiered",
+        "@default",
+    ];
+    let lower = model.trim().to_lowercase();
+    for suffix in TIER_SUFFIXES {
+        if lower.ends_with(suffix) {
+            // 剥离后缀（保留原始大小写前缀）
+            let prefix_len = model.len() - suffix.len();
+            return model[..prefix_len].to_string();
+        }
+    }
+    model.trim().to_string()
+}
+
 pub fn normalize_to_standard_id(model_name: &str) -> Option<String> {
     let lower = model_name.to_lowercase();
 
@@ -979,7 +990,7 @@ mod tests {
         let empty = HashMap::new();
         assert_eq!(
             resolve_model_route("gemini-3.1-pro-high", &empty),
-            "gemini-3.1-pro-high"
+            "gemini-pro-agent"
         );
         assert_eq!(
             resolve_model_route("gemini-pro-agent", &empty),
