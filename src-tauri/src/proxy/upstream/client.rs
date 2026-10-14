@@ -765,20 +765,13 @@ impl UpstreamClient {
                         }
 
                         // 不可重试的错误或已是最后一个端点，直接返回
-                        let raw_body = resp.text().await.unwrap_or_default();
-                        let sanitized = sanitize_error_for_log(&raw_body);
-                        let err_detail = if sanitized.trim().is_empty() {
-                            format!("HTTP {}", status)
-                        } else {
-                            sanitized.trim().to_string()
-                        };
                         fallback_attempts.push(FallbackAttemptLog {
                             endpoint_name: parse_endpoint_name(base_url).to_string(),
                             endpoint_url: url.clone(),
                             status: Some(status.as_u16()),
                             duration_s,
                             switch_delay_s,
-                            error: err_detail,
+                            error: format!("HTTP {}", status),
                             is_effective: false,
                         });
                         return Ok(UpstreamCallResult {

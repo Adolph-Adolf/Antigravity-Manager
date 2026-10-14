@@ -4205,6 +4205,8 @@ pub async fn handle_completions(
         let effective_attempt_start = call_result.effective_attempt_start;
         let mut fallback_attempts = call_result.fallback_attempts.clone();
         fallback_overhead_ms = call_result.fallback_overhead_s() * 1000.0;
+        let attempts_b64 =
+            crate::proxy::handlers::common::encode_attempts_header(&fallback_attempts);
 
         let response = call_result.response;
         let upstream_url = response.url().to_string();
