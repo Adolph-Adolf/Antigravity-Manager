@@ -3,6 +3,13 @@
 > Complete version history for Antigravity Tools. Return to project home at [README.md](README.md).
 
 *   **Version History**:
+    *   **v4.9.8-beta.3 (2026-10-15)**:
+        -   **[Non-Streaming TTFT Header Hydration, Raw Upstream Error Transparency & Pure Native Timing UI]**:
+            -   **Non-Streaming TTFT Measurement Coverage**: Fixed missing `X-Timing-Ttft-Ms` in Claude non-streaming responses (such as prompt compaction summaries) that caused empty ("-") first-token values in the log table; added dual-source TTFT extraction ensuring 100% TTFT availability across all streaming and non-streaming calls.
+            -   **Transparent Raw Error Payload in Fallback Attempts**: In `UpstreamClient`, captured and sanitized raw upstream response bodies during retryable 5xx/timeout failures, directly displaying the official upstream error payload in the diagnostic timeline card.
+            -   **Streamlined Native Timing Stage Labels**: Completely eliminated mixed English parentheses across all Chinese timing stage labels for pure native localization; nested fallback overhead duration directly beneath the TTFT stage to keep the multi-stage progress bar perfectly balanced.
+            -   **Base64 Pass-Through for Attempt Traces**: Injected `X-Timing-Ttft-Attempts` as a Base64-encoded response header, eliminating async task context drops and allowing the frontend to reconstruct complete fallback timelines under any conditions.
+
     *   **v4.9.8-beta.2 (2026-10-14)**:
         -   **[Full fetchAvailableModels Dynamic Catalog Alignment, Removal of Static Hardcoded Models & Adaptive Support] (Ref #3665)**:
             -   **Native Authorized Model Catalog (available_models)**: Added `available_models: HashSet<String>` to `ProxyToken`, mirroring the raw model catalog delivered live by Google's `fetchAvailableModels`. Acts as the single source of truth for account capabilities, enabling fully adaptive model dispatching. (Ref #3665)
