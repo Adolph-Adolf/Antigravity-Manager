@@ -2129,6 +2129,8 @@ pub async fn handle_messages(
                     {
                         effective_item.duration_s = ttft_ms / 1000.0;
                     }
+                    let attempts_b64 =
+                        crate::proxy::handlers::common::encode_attempts_header(&fallback_attempts);
                     let _ = crate::proxy::monitor::CURRENT_UPSTREAM_CAPTURE.try_with(|holder| {
                         holder.set_attempts(fallback_attempts.clone());
                     });
@@ -2163,6 +2165,10 @@ pub async fn handle_messages(
                         .header(
                             "X-Timing-Ttft-Overhead-Ms",
                             format!("{:.3}", fallback_overhead_ms),
+                        )
+                        .header(
+                            "X-Timing-Ttft-Attempts",
+                            attempts_b64.as_deref().unwrap_or(""),
                         )
                         .body(Body::from_stream(stream_mapped))
                         .unwrap();
@@ -2311,6 +2317,10 @@ pub async fn handle_messages(
                         match collect_stream_to_json(Box::pin(combined_stream)).await {
                             Ok(full_response) => {
                                 info!("[{}] ✓ Stream collected and converted to JSON", trace_id);
+                                let attempts_b64 =
+                                    crate::proxy::handlers::common::encode_attempts_header(
+                                        &fallback_attempts,
+                                    );
                                 return Response::builder()
                                     .status(StatusCode::OK)
                                     .header(header::CONTENT_TYPE, "application/json")
@@ -2327,6 +2337,10 @@ pub async fn handle_messages(
                                     .header(
                                         "X-Timing-Ttft-Overhead-Ms",
                                         format!("{:.3}", fallback_overhead_ms),
+                                    )
+                                    .header(
+                                        "X-Timing-Ttft-Attempts",
+                                        attempts_b64.as_deref().unwrap_or(""),
                                     )
                                     .body(Body::from(
                                         serde_json::to_string(&full_response).unwrap(),
@@ -2449,16 +2463,41 @@ pub async fn handle_messages(
                     cache_info
                 );
 
-                return (
-                    StatusCode::OK,
-                    [
-                        ("X-Account-Email", email.as_str()),
-                        ("X-Mapped-Model", request_with_mapped.model.as_str()),
-                        ("X-Upstream-Model", config.final_model.as_str()),
-                    ],
-                    Json(claude_response),
-                )
-                    .into_response();
+                ttft_ms = effective_attempt_start.elapsed().as_micros() as f64 / 1000.0;
+                if let Some(effective_item) = fallback_attempts.iter_mut().find(|a| a.is_effective)
+                {
+                    effective_item.duration_s = ttft_ms / 1000.0;
+                }
+                let attempts_b64 =
+                    crate::proxy::handlers::common::encode_attempts_header(&fallback_attempts);
+                let _ = crate::proxy::monitor::CURRENT_UPSTREAM_CAPTURE.try_with(|holder| {
+                    holder.set_attempts(fallback_attempts.clone());
+                });
+
+                return Response::builder()
+                    .status(StatusCode::OK)
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .header("X-Account-Email", &email)
+                    .header("X-Mapped-Model", &request_with_mapped.model)
+                    .header("X-Upstream-Model", config.final_model.as_str())
+                    .header("X-Session-Id", &client_session_id)
+                    .header("X-Antigravity-Session-Id", &client_session_id)
+                    .header("X-Timing-Clean-Ms", format!("{:.3}", clean_ms))
+                    .header("X-Timing-Norm-Ms", format!("{:.3}", norm_ms))
+                    .header("X-Timing-Thinking-Ms", format!("{:.3}", think_fill_ms))
+                    .header("X-Timing-Ttft-Ms", format!("{:.3}", ttft_ms))
+                    .header(
+                        "X-Timing-Ttft-Overhead-Ms",
+                        format!("{:.3}", fallback_overhead_ms),
+                    )
+                    .header(
+                        "X-Timing-Ttft-Attempts",
+                        attempts_b64.as_deref().unwrap_or(""),
+                    )
+                    .body(Body::from(
+                        serde_json::to_string(&claude_response).unwrap_or_default(),
+                    ))
+                    .unwrap();
             }
         }
 

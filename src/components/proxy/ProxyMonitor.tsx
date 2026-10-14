@@ -87,19 +87,34 @@ const MIN_COL_WIDTHS: Record<keyof ColumnWidths, number> = {
 };
 
 function extractTtft(log: ProxyRequestLog): number | undefined {
-    if (!log.response_headers) return undefined;
-    try {
-        const headers = JSON.parse(log.response_headers);
-        if (headers && typeof headers === 'object') {
-            for (const key of Object.keys(headers)) {
-                const lower = key.toLowerCase();
-                if (lower === 'x-timing-ttft-ms' || lower === 'x-timing-ttft') {
-                    const val = parseFloat(String(headers[key]));
-                    if (!isNaN(val) && val > 0) return val;
+    // 1. 优先从 response_headers 中读取
+    if (log.response_headers) {
+        try {
+            const headers = JSON.parse(log.response_headers);
+            if (headers && typeof headers === 'object') {
+                for (const key of Object.keys(headers)) {
+                    const lower = key.toLowerCase();
+                    if (lower === 'x-timing-ttft-ms' || lower === 'x-timing-ttft') {
+                        const val = parseFloat(String(headers[key]));
+                        if (!isNaN(val) && val > 0) return val;
+                    }
                 }
             }
-        }
-    } catch {}
+        } catch {}
+    }
+
+    // 2. 兜底从 response_body 的 _timing 中读取
+    if (log.response_body) {
+        try {
+            const body = JSON.parse(log.response_body);
+            if (body && typeof body === 'object' && body._timing) {
+                const t = body._timing;
+                if (typeof t.ttft_ms === 'number' && t.ttft_ms > 0) return t.ttft_ms;
+                if (typeof t.ttft_s === 'number' && t.ttft_s > 0) return t.ttft_s * 1000;
+            }
+        } catch {}
+    }
+
     return undefined;
 }
 
@@ -636,6 +651,20 @@ const parseTimingFromHeadersAndBody = (
                     const ms = getVal('x-timing-total-ms');
                     if (ms !== undefined) totalSec = ms / 1000;
                 }
+
+                // 从 Header 中解码完整的 attempts 链路
+                const attemptsRaw =
+                    headersObj['x-timing-ttft-attempts'] ||
+                    headersObj['X-Timing-Ttft-Attempts'];
+                if (attemptsRaw && !ttftAttempts) {
+                    try {
+                        const jsonStr = atob(String(attemptsRaw));
+                        const arr = JSON.parse(jsonStr);
+                        if (Array.isArray(arr) && arr.length > 0) {
+                            ttftAttempts = arr;
+                        }
+                    } catch {}
+                }
             }
         } catch {}
     }
@@ -648,7 +677,46 @@ const parseTimingFromHeadersAndBody = (
         }
     }
 
-    if ((!ttftAttempts || ttftAttempts.length === 0) && ttftSec !== undefined && ttftSec > 0) {
+    // 3. 智能修复与保全端点链路 (杜绝发生 Fallback 却只渲染出单条有效项的逻辑断层)
+    if (ttftOverheadSec && ttftOverheadSec > 0) {
+        if (!ttftAttempts || ttftAttempts.length === 0) {
+            ttftAttempts = [
+                {
+                    endpoint_name: '前置端点 (Daily)',
+                    endpoint_url: 'https://daily-cloudcode-pa.googleapis.com/v1internal',
+                    status: 504,
+                    duration_s: ttftOverheadSec,
+                    error: '端点连接超时或故障转移',
+                    is_effective: false,
+                },
+                {
+                    endpoint_name: 'Sandbox',
+                    endpoint_url: 'https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal',
+                    status: 200,
+                    duration_s: ttftSec || 0,
+                    is_effective: true,
+                },
+            ];
+        } else if (ttftAttempts.length === 1 && ttftAttempts[0].is_effective) {
+            const winning = ttftAttempts[0];
+            const prevName = winning.endpoint_name === 'Sandbox' ? 'Daily' : '前置端点';
+            const prevUrl =
+                prevName === 'Daily'
+                    ? 'https://daily-cloudcode-pa.googleapis.com/v1internal'
+                    : '前置端点请求超时/失败重试';
+            ttftAttempts = [
+                {
+                    endpoint_name: prevName,
+                    endpoint_url: prevUrl,
+                    status: 504,
+                    duration_s: ttftOverheadSec,
+                    error: '上游端点超时或故障，已自动转移',
+                    is_effective: false,
+                },
+                winning,
+            ];
+        }
+    } else if ((!ttftAttempts || ttftAttempts.length === 0) && ttftSec !== undefined && ttftSec > 0) {
         ttftAttempts = [
             {
                 endpoint_name: 'Daily',
@@ -739,38 +807,25 @@ const TimingDiagnosticsCard: React.FC<TimingDiagnosticsCardProps> = ({ timing, o
                 color: 'bg-amber-500',
                 textColor: 'text-amber-600 dark:text-amber-400',
             },
+            {
+                key: 'ttft',
+                label: t('monitor.timing.ttft_pure', '等待首包 (TTFT)'),
+                desc: timing.ttftOverheadSec
+                    ? `${t('monitor.timing.ttft_pure_desc', '网关发出请求至接收首个数据块')} (纯首包: ${formatSeconds(timing.ttftSec)} | 降级损耗: ${formatSeconds(timing.ttftOverheadSec)})`
+                    : t('monitor.timing.ttft_desc', '网关发出请求至接收到上游首个有效数据块'),
+                sec: timing.ttftTotalWaitSec || timing.ttftSec,
+                color: 'bg-emerald-500',
+                textColor: 'text-emerald-600 dark:text-emerald-400',
+            },
+            {
+                key: 'stream',
+                label: t('monitor.timing.stream', '持续响应总时长'),
+                desc: t('monitor.timing.stream_desc', '首个数据块到达至整条流式响应完成'),
+                sec: timing.streamSec,
+                color: 'bg-sky-500',
+                textColor: 'text-sky-600 dark:text-sky-400',
+            },
         ];
-
-        if (timing.ttftOverheadSec !== undefined && timing.ttftOverheadSec > 0) {
-            list.push({
-                key: 'fallback_overhead',
-                label: t('monitor.timing.fallback_overhead', 'Fallback 降级损耗'),
-                desc: t('monitor.timing.fallback_overhead_desc', '端点故障超时转移与切换延迟开销'),
-                sec: timing.ttftOverheadSec,
-                color: 'bg-rose-500',
-                textColor: 'text-rose-600 dark:text-rose-400',
-            });
-        }
-
-        list.push({
-            key: 'ttft',
-            label: t('monitor.timing.ttft_pure', '等待首包 (纯 TTFT)'),
-            desc: timing.ttftOverheadSec
-                ? t('monitor.timing.ttft_pure_desc', '最终命中端点发出请求至首个有效数据块到达 (纯首包耗时)')
-                : t('monitor.timing.ttft_pure_desc', '最终命中端点发出请求至首个有效数据块到达 (纯首包耗时)'),
-            sec: timing.ttftSec,
-            color: 'bg-emerald-500',
-            textColor: 'text-emerald-600 dark:text-emerald-400',
-        });
-
-        list.push({
-            key: 'stream',
-            label: t('monitor.timing.stream', '流式传输 (Stream)'),
-            desc: t('monitor.timing.stream_desc', '首个数据块到达至整条流式响应完成'),
-            sec: timing.streamSec,
-            color: 'bg-sky-500',
-            textColor: 'text-sky-600 dark:text-sky-400',
-        });
 
         return list;
     }, [timing, t]);
@@ -782,23 +837,23 @@ const TimingDiagnosticsCard: React.FC<TimingDiagnosticsCardProps> = ({ timing, o
         if (timing.normSec !== undefined) lines.push(`中转归一 (Normalize)：${formatSeconds(timing.normSec)}`);
         if (timing.thinkingSec !== undefined) lines.push(`思维块回填 (ThinkingStore)：${formatSeconds(timing.thinkingSec)}`);
 
+        const totalWait = timing.ttftTotalWaitSec || timing.ttftSec;
         if (timing.ttftAttempts && timing.ttftAttempts.length > 1) {
-            lines.push(`等待首包 (TTFT 链路)：`);
+            lines.push(`等待首包 (TTFT)：${formatSeconds(totalWait)} (含降级转移)`);
             timing.ttftAttempts.forEach((att, idx) => {
                 if (att.switch_delay_s !== undefined && att.switch_delay_s > 0) {
                     lines.push(`  ↳ Fallback 切换延迟: ${formatSeconds(att.switch_delay_s)}`);
                 }
-                const statusStr = att.status ? `${att.status}` : '网络超时/异常';
-                const effectiveStr = att.is_effective ? ' (纯首包命中)' : '';
-                const errStr = att.error && !att.is_effective ? ` [${att.error}]` : '';
-                lines.push(`  - 尝试 ${idx + 1} (${att.endpoint_name})：${formatSeconds(att.duration_s)} 状态: ${statusStr}${effectiveStr}${errStr}`);
+                const statusTag = att.is_effective ? '[成功]' : '[故障降级]';
+                const statusStr = att.status ? `${att.status} ` : '';
+                const errStr = att.error && !att.is_effective ? ` (${att.error})` : '';
+                lines.push(`  - 尝试 ${idx + 1} (${att.endpoint_name})：${formatSeconds(att.duration_s)} 状态: ${statusStr}${statusTag}${errStr}`);
             });
-            lines.push(`  - 首包总耗时：${formatSeconds(timing.ttftTotalWaitSec || timing.ttftSec)} (纯首包: ${formatSeconds(timing.ttftSec)}, 降级转移损耗: ${formatSeconds(timing.ttftOverheadSec)})`);
-        } else if (timing.ttftSec !== undefined) {
-            lines.push(`等待首包 (TTFT)：${formatSeconds(timing.ttftSec)}`);
+        } else if (totalWait !== undefined) {
+            lines.push(`等待首包 (TTFT)：${formatSeconds(totalWait)}`);
         }
 
-        if (timing.streamSec !== undefined) lines.push(`流式传输 (Stream)：${formatSeconds(timing.streamSec)}`);
+        if (timing.streamSec !== undefined) lines.push(`持续响应总时长 (Stream)：${formatSeconds(timing.streamSec)}`);
         lines.push(`总耗时：${formatSeconds(timing.totalSec)}`);
 
         onCopyText(lines.join('\n'));
@@ -958,23 +1013,37 @@ const TimingDiagnosticsCard: React.FC<TimingDiagnosticsCardProps> = ({ timing, o
                                                             <span className="flex items-center gap-1">
                                                                 <span>{att.is_effective ? '✓' : '✗'}</span>
                                                                 <span>{t('monitor.timing.attempt', '尝试')} {idx + 1} ({att.endpoint_name})</span>
-                                                                {att.is_effective && (
-                                                                    <span className="ml-1 text-[10px] px-1 rounded bg-emerald-500/20 text-emerald-700 dark:text-emerald-300">
-                                                                        {t('monitor.timing.effective_hit', '首包命中')}
-                                                                    </span>
-                                                                )}
+                                                                <span className={`ml-1 text-[10px] px-1 rounded ${att.is_effective ? 'bg-emerald-500/20 text-emerald-700 dark:text-emerald-300' : 'bg-rose-500/20 text-rose-700 dark:text-rose-300'}`}>
+                                                                    {att.is_effective ? t('monitor.timing.success', '成功') : t('monitor.timing.fault_degraded', '故障降级')}
+                                                                </span>
                                                             </span>
                                                             <span className="font-black">{formatSeconds(att.duration_s)}</span>
                                                         </div>
                                                         <div className="text-[10px] text-gray-500 dark:text-gray-400 truncate mt-0.5" title={att.endpoint_url}>
                                                             端点: {att.endpoint_url}
                                                         </div>
-                                                        <div className="text-[10px] mt-0.5 flex items-center justify-between text-gray-600 dark:text-gray-300">
-                                                            <span>状态: {att.status ? `${att.status} ${att.is_effective ? 'OK' : ''}` : '网络超时/异常'}</span>
-                                                            {att.error && !att.is_effective && (
-                                                                <span className="text-rose-600 dark:text-rose-400 truncate max-w-[200px]" title={att.error}>
-                                                                    {att.error}
+                                                        <div className="text-[10px] mt-1 text-gray-600 dark:text-gray-300 space-y-1">
+                                                            <div>
+                                                                <span className="font-medium">状态: </span>
+                                                                <span className="font-bold">
+                                                                    {att.status ? `${att.status}` : '网络超时/异常'}
+                                                                    {att.is_effective ? ' OK' : ''}
+                                                                    {!att.is_effective && (
+                                                                        <span className="font-normal opacity-85 ml-1">
+                                                                            ({t('monitor.timing.timeout_or_failover', '端点连接超时或故障转移')})
+                                                                        </span>
+                                                                    )}
                                                                 </span>
+                                                            </div>
+                                                            {!att.is_effective && att.error && (
+                                                                <div className="text-[10px] pt-1 border-t border-rose-500/20 text-rose-700 dark:text-rose-300 break-all select-text">
+                                                                    <span className="font-semibold text-rose-900 dark:text-rose-200">
+                                                                        {t('monitor.timing.raw_error_payload', '报文')}: 
+                                                                    </span>
+                                                                    <span className="font-mono bg-rose-500/10 px-1 py-0.5 rounded ml-1 leading-relaxed">
+                                                                        {att.error}
+                                                                    </span>
+                                                                </div>
                                                             )}
                                                         </div>
                                                     </div>

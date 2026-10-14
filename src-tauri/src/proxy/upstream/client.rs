@@ -707,15 +707,21 @@ impl UpstreamClient {
                             && headers.contains_key("x-goog-user-project")
                         {
                             last_attempt_failed_at = Some(std::time::Instant::now());
+                            let raw_body = resp.text().await.unwrap_or_default();
+                            let sanitized = sanitize_error_for_log(&raw_body);
+                            let err_detail = if sanitized.trim().is_empty() {
+                                "403 Forbidden with project header (downgrading without header)"
+                                    .to_string()
+                            } else {
+                                sanitized.trim().to_string()
+                            };
                             fallback_attempts.push(FallbackAttemptLog {
                                 endpoint_name: parse_endpoint_name(base_url).to_string(),
                                 endpoint_url: url.clone(),
                                 status: Some(status.as_u16()),
                                 duration_s,
                                 switch_delay_s,
-                                error:
-                                    "403 Forbidden with project header (downgrading without header)"
-                                        .to_string(),
+                                error: err_detail,
                                 is_effective: false,
                             });
                             tracing::warn!(
@@ -730,12 +736,19 @@ impl UpstreamClient {
                         if has_next && Self::should_try_next_endpoint(status) {
                             self.endpoint_health.mark_failure(base_url);
                             last_attempt_failed_at = Some(std::time::Instant::now());
-                            let err_msg = format!("Upstream {} returned {}", base_url, status);
+                            let raw_body = resp.text().await.unwrap_or_default();
+                            let sanitized = sanitize_error_for_log(&raw_body);
+                            let err_msg = if sanitized.trim().is_empty() {
+                                format!("HTTP {}", status)
+                            } else {
+                                sanitized.trim().to_string()
+                            };
                             tracing::warn!(
-                                "Upstream endpoint returned {} at {} (method={}), trying next endpoint",
+                                "Upstream endpoint returned {} at {} (method={}): {}",
                                 status,
                                 base_url,
-                                method
+                                method,
+                                err_msg
                             );
                             // [NEW] 记录降级尝试
                             fallback_attempts.push(FallbackAttemptLog {
@@ -752,13 +765,20 @@ impl UpstreamClient {
                         }
 
                         // 不可重试的错误或已是最后一个端点，直接返回
+                        let raw_body = resp.text().await.unwrap_or_default();
+                        let sanitized = sanitize_error_for_log(&raw_body);
+                        let err_detail = if sanitized.trim().is_empty() {
+                            format!("HTTP {}", status)
+                        } else {
+                            sanitized.trim().to_string()
+                        };
                         fallback_attempts.push(FallbackAttemptLog {
                             endpoint_name: parse_endpoint_name(base_url).to_string(),
                             endpoint_url: url.clone(),
                             status: Some(status.as_u16()),
                             duration_s,
                             switch_delay_s,
-                            error: format!("Upstream {} returned {}", base_url, status),
+                            error: err_detail,
                             is_effective: false,
                         });
                         return Ok(UpstreamCallResult {

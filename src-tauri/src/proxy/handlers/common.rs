@@ -958,6 +958,19 @@ pub fn build_dual_track_error(
     }
 }
 
+/// 将端点尝试记录列表安全序列化并编码为 Base64，便于注入 HTTP 响应头
+pub fn encode_attempts_header(
+    attempts: &[crate::proxy::upstream::client::FallbackAttemptLog],
+) -> Option<String> {
+    if attempts.is_empty() {
+        return None;
+    }
+    use base64::Engine;
+    serde_json::to_string(attempts)
+        .ok()
+        .map(|json_str| base64::engine::general_purpose::STANDARD.encode(json_str.as_bytes()))
+}
+
 #[cfg(test)]
 mod retry_after_tests {
     use super::*;

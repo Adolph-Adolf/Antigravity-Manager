@@ -2357,6 +2357,8 @@ pub async fn handle_chat_completions(
         let effective_attempt_start = call_result.effective_attempt_start;
         let mut fallback_attempts = call_result.fallback_attempts.clone();
         fallback_overhead_ms = call_result.fallback_overhead_s() * 1000.0;
+        let attempts_b64 =
+            crate::proxy::handlers::common::encode_attempts_header(&fallback_attempts);
 
         // [NEW] 记录端点降级日志到 debug 文件
         if call_result.has_fallback() && debug_logger::is_enabled(&debug_cfg) {
@@ -2674,6 +2676,10 @@ pub async fn handle_chat_completions(
                             "X-Timing-Ttft-Overhead-Ms",
                             format!("{:.3}", fallback_overhead_ms),
                         )
+                        .header(
+                            "X-Timing-Ttft-Attempts",
+                            attempts_b64.as_deref().unwrap_or(""),
+                        )
                         .body(body)
                         .unwrap()
                         .into_response());
@@ -2722,6 +2728,10 @@ pub async fn handle_chat_completions(
                                 .header(
                                     "X-Timing-Ttft-Overhead-Ms",
                                     format!("{:.3}", fallback_overhead_ms),
+                                )
+                                .header(
+                                    "X-Timing-Ttft-Attempts",
+                                    attempts_b64.as_deref().unwrap_or(""),
                                 )
                                 .body(Body::from(
                                     serde_json::to_string(&full_response).unwrap_or_default(),
@@ -4422,6 +4432,10 @@ pub async fn handle_completions(
                             "X-Timing-Ttft-Overhead-Ms",
                             format!("{:.3}", fallback_overhead_ms),
                         )
+                        .header(
+                            "X-Timing-Ttft-Attempts",
+                            attempts_b64.as_deref().unwrap_or(""),
+                        )
                         .body(Body::from_stream(combined_stream))
                         .unwrap()
                         .into_response();
@@ -4606,6 +4620,10 @@ pub async fn handle_completions(
                                         "X-Timing-Ttft-Overhead-Ms",
                                         format!("{:.3}", fallback_overhead_ms),
                                     )
+                                    .header(
+                                        "X-Timing-Ttft-Attempts",
+                                        attempts_b64.as_deref().unwrap_or(""),
+                                    )
                                     .body(Body::from(
                                         serde_json::to_string(&resp).unwrap_or_default(),
                                     ))
@@ -4684,6 +4702,10 @@ pub async fn handle_completions(
                                 .header(
                                     "X-Timing-Ttft-Overhead-Ms",
                                     format!("{:.3}", fallback_overhead_ms),
+                                )
+                                .header(
+                                    "X-Timing-Ttft-Attempts",
+                                    attempts_b64.as_deref().unwrap_or(""),
                                 )
                                 .body(Body::from(
                                     serde_json::to_string(&legacy_resp).unwrap_or_default(),
