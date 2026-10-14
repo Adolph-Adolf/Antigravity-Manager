@@ -67,13 +67,23 @@ interface ColumnWidths {
 }
 
 const DEFAULT_COL_WIDTHS: ColumnWidths = {
-    status: 68,
-    endpoint: 250,
-    model: 260,
-    account: 140,
-    usage: 145,
-    duration: 90,
-    time: 85,
+    status: 70,
+    endpoint: 200,
+    model: 240,
+    account: 150,
+    usage: 185,
+    duration: 105,
+    time: 90,
+};
+
+const MIN_COL_WIDTHS: Record<keyof ColumnWidths, number> = {
+    status: 55,
+    endpoint: 120,
+    model: 140,
+    account: 100,
+    usage: 160,
+    duration: 85,
+    time: 75,
 };
 
 function extractTtft(log: ProxyRequestLog): number | undefined {
@@ -105,7 +115,7 @@ const LogTable: React.FC<LogTableProps> = ({
 
     const [colWidths, setColWidths] = useState<ColumnWidths>(() => {
         try {
-            const saved = localStorage.getItem('proxy_log_col_widths_v6');
+            const saved = localStorage.getItem('proxy_log_col_widths_v8');
             if (saved) {
                 return { ...DEFAULT_COL_WIDTHS, ...JSON.parse(saved) };
             }
@@ -113,7 +123,7 @@ const LogTable: React.FC<LogTableProps> = ({
         return DEFAULT_COL_WIDTHS;
     });
 
-    // 监听容器宽度自适应
+    // 监听容器宽度，用于支持大屏自适应底宽
     useEffect(() => {
         if (!containerRef.current) return;
         const ro = new ResizeObserver((entries) => {
@@ -128,35 +138,15 @@ const LogTable: React.FC<LogTableProps> = ({
         return () => ro.disconnect();
     }, []);
 
-    // 容器变宽（例如大屏全屏）且用户未在拖拽时，自动将富余空间弹性分配给最需要长文本的 endpoint 和 model
-    useEffect(() => {
-        if (isResizingRef.current || containerWidth <= 0) return;
-        setColWidths((prev) => {
-            const curTotal = Object.values(prev).reduce((a, b) => a + b, 0);
-            const available = containerWidth - 4;
-            const extra = available - curTotal;
-            if (extra > 15) {
-                const epShare = Math.round(extra * 0.45);
-                const mdShare = extra - epShare;
-                return {
-                    ...prev,
-                    endpoint: prev.endpoint + epShare,
-                    model: prev.model + mdShare,
-                };
-            }
-            return prev;
-        });
-    }, [containerWidth]);
-
-    // 严格 1:1 绝对线性鼠标拖拽：以表头真实渲染宽度为基准，鼠标向右移多少像素就变大多少，绝无反向与抖动
+    // 严格 1:1 独立线性列宽拖拽：以当前列状态设定宽为基准，鼠标移动多少像素该列就变大/变小多少，绝不联动篡改相邻列
     const handleResizeStart = (colKey: keyof ColumnWidths, e: React.MouseEvent) => {
         e.preventDefault();
         e.stopPropagation();
         isResizingRef.current = true;
 
         const startX = e.clientX;
-        const thElement = (e.currentTarget as HTMLElement).closest('th');
-        const startWidth = thElement ? Math.round(thElement.getBoundingClientRect().width) : colWidths[colKey];
+        const startWidth = colWidths[colKey];
+        const minW = MIN_COL_WIDTHS[colKey];
 
         const originalCursor = document.body.style.cursor;
         const originalUserSelect = document.body.style.userSelect;
@@ -165,7 +155,7 @@ const LogTable: React.FC<LogTableProps> = ({
 
         const onMouseMove = (moveEvent: MouseEvent) => {
             const diff = moveEvent.clientX - startX;
-            const newWidth = Math.max(50, startWidth + diff);
+            const newWidth = Math.max(minW, startWidth + diff);
             setColWidths((prev) => ({
                 ...prev,
                 [colKey]: newWidth,
@@ -179,18 +169,16 @@ const LogTable: React.FC<LogTableProps> = ({
             window.removeEventListener('mouseup', onMouseUp);
 
             const finalDiff = upEvent.clientX - startX;
-            const finalWidth = Math.max(50, startWidth + finalDiff);
+            const finalWidth = Math.max(minW, startWidth + finalDiff);
             setColWidths((prev) => {
                 const next = { ...prev, [colKey]: finalWidth };
                 try {
-                    localStorage.setItem('proxy_log_col_widths_v6', JSON.stringify(next));
+                    localStorage.setItem('proxy_log_col_widths_v8', JSON.stringify(next));
                 } catch {}
                 return next;
             });
 
-            setTimeout(() => {
-                isResizingRef.current = false;
-            }, 60);
+            isResizingRef.current = false;
         };
 
         window.addEventListener('mousemove', onMouseMove);
@@ -203,7 +191,7 @@ const LogTable: React.FC<LogTableProps> = ({
         setColWidths((prev) => {
             const next = { ...prev, [colKey]: DEFAULT_COL_WIDTHS[colKey] };
             try {
-                localStorage.setItem('proxy_log_col_widths_v6', JSON.stringify(next));
+                localStorage.setItem('proxy_log_col_widths_v8', JSON.stringify(next));
             } catch {}
             return next;
         });
@@ -219,106 +207,106 @@ const LogTable: React.FC<LogTableProps> = ({
             className="flex-1 overflow-y-auto overflow-x-auto bg-white dark:bg-base-100 relative scrollbar-thin"
         >
             <table
-                className="table table-sm border-separate border-spacing-0"
+                className="table table-sm border-separate border-spacing-0 w-full"
                 style={{
-                    minWidth: '100%',
+                    minWidth: `${totalTableWidth}px`,
                     width: `${Math.max(containerWidth || 0, totalTableWidth)}px`,
                     tableLayout: 'fixed'
                 }}
             >
                 <colgroup>
-                    <col style={{ width: `${colWidths.status}px` }} />
-                    <col style={{ width: `${colWidths.endpoint}px` }} />
-                    <col style={{ width: `${colWidths.model}px` }} />
-                    <col style={{ width: `${colWidths.account}px` }} />
-                    <col style={{ width: `${colWidths.usage}px` }} />
-                    <col style={{ width: `${colWidths.duration}px` }} />
-                    <col style={{ width: `${colWidths.time}px` }} />
+                    <col style={{ width: `${colWidths.status}px`, minWidth: `${MIN_COL_WIDTHS.status}px` }} />
+                    <col style={{ width: `${colWidths.endpoint}px`, minWidth: `${MIN_COL_WIDTHS.endpoint}px` }} />
+                    <col style={{ width: `${colWidths.model}px`, minWidth: `${MIN_COL_WIDTHS.model}px` }} />
+                    <col style={{ width: `${colWidths.account}px`, minWidth: `${MIN_COL_WIDTHS.account}px` }} />
+                    <col style={{ width: `${colWidths.usage}px`, minWidth: `${MIN_COL_WIDTHS.usage}px` }} />
+                    <col style={{ width: `${colWidths.duration}px`, minWidth: `${MIN_COL_WIDTHS.duration}px` }} />
+                    <col style={{ width: `${colWidths.time}px`, minWidth: `${MIN_COL_WIDTHS.time}px` }} />
                 </colgroup>
                 <thead className="bg-gray-100/90 dark:bg-base-200 text-gray-700 dark:text-gray-200 text-xs font-semibold sticky top-0 z-10 backdrop-blur-sm border-b border-gray-200 dark:border-base-300">
                     <tr>
                         {/* 1. 状态 */}
-                        <th style={{ width: `${colWidths.status}px` }} className="py-2.5 px-3 relative group select-none">
-                            <div className="truncate">{t('monitor.table.status', '状态')}</div>
+                        <th style={{ width: `${colWidths.status}px`, maxWidth: `${colWidths.status}px` }} className="py-2.5 px-3 relative select-none overflow-hidden box-border">
+                            <div className="truncate font-semibold">{t('monitor.table.status', '状态')}</div>
                             <div
                                 onMouseDown={(e) => handleResizeStart('status', e)}
                                 onDoubleClick={(e) => handleResetColumnWidth('status', e)}
-                                className="absolute -right-1.5 top-0 bottom-0 w-3 cursor-col-resize flex items-center justify-center z-20 group/handle"
+                                className="absolute right-0 top-0 bottom-0 w-2.5 cursor-col-resize flex items-center justify-end z-20 group/handle"
                                 title={t('monitor.table.resize_handle_tooltip', '拖拽调整宽度 / 双击恢复默认')}
                             >
-                                <div className="w-[2px] h-full transition-colors group-hover/handle:bg-blue-500 active:bg-blue-600 bg-transparent group-hover:bg-gray-300 dark:group-hover:bg-gray-600" />
+                                <div className="w-[2px] h-full transition-colors group-hover/handle:bg-blue-500 active:bg-blue-600 bg-transparent" />
                             </div>
                         </th>
                         {/* 2. 端点与协议 */}
-                        <th style={{ width: `${colWidths.endpoint}px` }} className="py-2.5 px-3 relative group select-none">
-                            <div className="truncate">{t('monitor.table.endpoint', '端点 / 协议')}</div>
+                        <th style={{ width: `${colWidths.endpoint}px`, maxWidth: `${colWidths.endpoint}px` }} className="py-2.5 px-3 relative select-none overflow-hidden box-border">
+                            <div className="truncate font-semibold">{t('monitor.table.endpoint', '端点 / 协议')}</div>
                             <div
                                 onMouseDown={(e) => handleResizeStart('endpoint', e)}
                                 onDoubleClick={(e) => handleResetColumnWidth('endpoint', e)}
-                                className="absolute -right-1.5 top-0 bottom-0 w-3 cursor-col-resize flex items-center justify-center z-20 group/handle"
+                                className="absolute right-0 top-0 bottom-0 w-2.5 cursor-col-resize flex items-center justify-end z-20 group/handle"
                                 title={t('monitor.table.resize_handle_tooltip', '拖拽调整宽度 / 双击恢复默认')}
                             >
-                                <div className="w-[2px] h-full transition-colors group-hover/handle:bg-blue-500 active:bg-blue-600 bg-transparent group-hover:bg-gray-300 dark:group-hover:bg-gray-600" />
+                                <div className="w-[2px] h-full transition-colors group-hover/handle:bg-blue-500 active:bg-blue-600 bg-transparent" />
                             </div>
                         </th>
                         {/* 3. 模型 */}
-                        <th style={{ width: `${colWidths.model}px` }} className="py-2.5 px-3 relative group select-none">
-                            <div className="truncate">{t('monitor.table.model_routing', '模型 (请求 / 真实)')}</div>
+                        <th style={{ width: `${colWidths.model}px`, maxWidth: `${colWidths.model}px` }} className="py-2.5 px-3 relative select-none overflow-hidden box-border">
+                            <div className="truncate font-semibold">{t('monitor.table.model_routing', '模型 (请求 / 真实)')}</div>
                             <div
                                 onMouseDown={(e) => handleResizeStart('model', e)}
                                 onDoubleClick={(e) => handleResetColumnWidth('model', e)}
-                                className="absolute -right-1.5 top-0 bottom-0 w-3 cursor-col-resize flex items-center justify-center z-20 group/handle"
+                                className="absolute right-0 top-0 bottom-0 w-2.5 cursor-col-resize flex items-center justify-end z-20 group/handle"
                                 title={t('monitor.table.resize_handle_tooltip', '拖拽调整宽度 / 双击恢复默认')}
                             >
-                                <div className="w-[2px] h-full transition-colors group-hover/handle:bg-blue-500 active:bg-blue-600 bg-transparent group-hover:bg-gray-300 dark:group-hover:bg-gray-600" />
+                                <div className="w-[2px] h-full transition-colors group-hover/handle:bg-blue-500 active:bg-blue-600 bg-transparent" />
                             </div>
                         </th>
                         {/* 4. 账号 */}
-                        <th style={{ width: `${colWidths.account}px` }} className="py-2.5 px-3 relative group select-none">
-                            <div className="truncate">{t('monitor.table.account', '服务账号')}</div>
+                        <th style={{ width: `${colWidths.account}px`, maxWidth: `${colWidths.account}px` }} className="py-2.5 px-3 relative select-none overflow-hidden box-border">
+                            <div className="truncate font-semibold">{t('monitor.table.account', '服务账号')}</div>
                             <div
                                 onMouseDown={(e) => handleResizeStart('account', e)}
                                 onDoubleClick={(e) => handleResetColumnWidth('account', e)}
-                                className="absolute -right-1.5 top-0 bottom-0 w-3 cursor-col-resize flex items-center justify-center z-20 group/handle"
+                                className="absolute right-0 top-0 bottom-0 w-2.5 cursor-col-resize flex items-center justify-end z-20 group/handle"
                                 title={t('monitor.table.resize_handle_tooltip', '拖拽调整宽度 / 双击恢复默认')}
                             >
-                                <div className="w-[2px] h-full transition-colors group-hover/handle:bg-blue-500 active:bg-blue-600 bg-transparent group-hover:bg-gray-300 dark:group-hover:bg-gray-600" />
+                                <div className="w-[2px] h-full transition-colors group-hover/handle:bg-blue-500 active:bg-blue-600 bg-transparent" />
                             </div>
                         </th>
                         {/* 5. Token 消耗 */}
-                        <th style={{ width: `${colWidths.usage}px` }} className="text-right py-2.5 px-3 relative group select-none whitespace-nowrap">
-                            <div className="truncate">{t('monitor.table.usage', 'Token 消耗')}</div>
+                        <th style={{ width: `${colWidths.usage}px`, maxWidth: `${colWidths.usage}px` }} className="text-right py-2.5 px-3 relative select-none overflow-hidden box-border">
+                            <div className="truncate font-semibold">{t('monitor.table.usage', 'Token 消耗')}</div>
                             <div
                                 onMouseDown={(e) => handleResizeStart('usage', e)}
                                 onDoubleClick={(e) => handleResetColumnWidth('usage', e)}
-                                className="absolute -right-1.5 top-0 bottom-0 w-3 cursor-col-resize flex items-center justify-center z-20 group/handle"
+                                className="absolute right-0 top-0 bottom-0 w-2.5 cursor-col-resize flex items-center justify-end z-20 group/handle"
                                 title={t('monitor.table.resize_handle_tooltip', '拖拽调整宽度 / 双击恢复默认')}
                             >
-                                <div className="w-[2px] h-full transition-colors group-hover/handle:bg-blue-500 active:bg-blue-600 bg-transparent group-hover:bg-gray-300 dark:group-hover:bg-gray-600" />
+                                <div className="w-[2px] h-full transition-colors group-hover/handle:bg-blue-500 active:bg-blue-600 bg-transparent" />
                             </div>
                         </th>
                         {/* 6. 耗时 / 首字 (独立列) */}
-                        <th style={{ width: `${colWidths.duration}px` }} className="text-right py-2.5 px-3 relative group select-none whitespace-nowrap">
-                            <div className="truncate">{t('monitor.table.duration_ttft', '耗时 / 首字')}</div>
+                        <th style={{ width: `${colWidths.duration}px`, maxWidth: `${colWidths.duration}px` }} className="text-right py-2.5 px-3 relative select-none overflow-hidden box-border">
+                            <div className="truncate font-semibold">{t('monitor.table.duration_ttft', '耗时 / 首字')}</div>
                             <div
                                 onMouseDown={(e) => handleResizeStart('duration', e)}
                                 onDoubleClick={(e) => handleResetColumnWidth('duration', e)}
-                                className="absolute -right-1.5 top-0 bottom-0 w-3 cursor-col-resize flex items-center justify-center z-20 group/handle"
+                                className="absolute right-0 top-0 bottom-0 w-2.5 cursor-col-resize flex items-center justify-end z-20 group/handle"
                                 title={t('monitor.table.resize_handle_tooltip', '拖拽调整宽度 / 双击恢复默认')}
                             >
-                                <div className="w-[2px] h-full transition-colors group-hover/handle:bg-blue-500 active:bg-blue-600 bg-transparent group-hover:bg-gray-300 dark:group-hover:bg-gray-600" />
+                                <div className="w-[2px] h-full transition-colors group-hover/handle:bg-blue-500 active:bg-blue-600 bg-transparent" />
                             </div>
                         </th>
                         {/* 7. 时间 */}
-                        <th style={{ width: `${colWidths.time}px` }} className="text-right py-2.5 px-3 relative group select-none">
-                            <div className="truncate">{t('monitor.table.time', '时间')}</div>
+                        <th style={{ width: `${colWidths.time}px`, maxWidth: `${colWidths.time}px` }} className="text-right py-2.5 px-3 relative select-none overflow-hidden box-border">
+                            <div className="truncate font-semibold">{t('monitor.table.time', '时间')}</div>
                             <div
                                 onMouseDown={(e) => handleResizeStart('time', e)}
                                 onDoubleClick={(e) => handleResetColumnWidth('time', e)}
-                                className="absolute -right-1.5 top-0 bottom-0 w-3 cursor-col-resize flex items-center justify-center z-20 group/handle"
+                                className="absolute right-0 top-0 bottom-0 w-2.5 cursor-col-resize flex items-center justify-end z-20 group/handle"
                                 title={t('monitor.table.resize_handle_tooltip', '拖拽调整宽度 / 双击恢复默认')}
                             >
-                                <div className="w-[2px] h-full transition-colors group-hover/handle:bg-blue-500 active:bg-blue-600 bg-transparent group-hover:bg-gray-300 dark:group-hover:bg-gray-600" />
+                                <div className="w-[2px] h-full transition-colors group-hover/handle:bg-blue-500 active:bg-blue-600 bg-transparent" />
                             </div>
                         </th>
                     </tr>
@@ -344,7 +332,7 @@ const LogTable: React.FC<LogTableProps> = ({
                                 onClick={() => onLogClick(log)}
                             >
                                 {/* 1. 状态 */}
-                                <td style={{ width: `${colWidths.status}px` }} className="py-2.5 px-3 align-middle">
+                                <td style={{ width: `${colWidths.status}px`, maxWidth: `${colWidths.status}px` }} className="py-2.5 px-3 align-middle overflow-hidden box-border">
                                     <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] font-bold border ${
                                         isSuccess
                                             ? 'bg-emerald-50 text-emerald-700 border-emerald-200/80 dark:bg-emerald-950/40 dark:text-emerald-300 dark:border-emerald-800/60'
@@ -356,8 +344,8 @@ const LogTable: React.FC<LogTableProps> = ({
                                 </td>
 
                                 {/* 2. 端点与协议 (Method + Protocol + URL) */}
-                                <td style={{ width: `${colWidths.endpoint}px` }} className="py-2.5 px-3 align-middle">
-                                    <div className="flex flex-col gap-1 min-w-0">
+                                <td style={{ width: `${colWidths.endpoint}px`, maxWidth: `${colWidths.endpoint}px` }} className="py-2.5 px-3 align-middle overflow-hidden box-border">
+                                    <div className="flex flex-col gap-1 min-w-0 max-w-full overflow-hidden">
                                         <div className="flex items-center gap-1.5 flex-wrap">
                                             {/* HTTP Method */}
                                              <span className="px-1.5 py-0.2 rounded text-[10px] font-bold font-mono tracking-wider bg-gray-100 text-gray-700 dark:bg-base-300 dark:text-gray-300 border border-gray-200/80 dark:border-base-200">
@@ -380,7 +368,7 @@ const LogTable: React.FC<LogTableProps> = ({
                                         </div>
                                         {/* URL Path */}
                                         <div 
-                                            className="text-gray-600 dark:text-gray-400 text-xs font-mono truncate"
+                                            className="text-gray-600 dark:text-gray-400 text-xs font-mono truncate max-w-full"
                                             title={log.url || ''}
                                         >
                                             {log.url || '-'}
@@ -389,9 +377,9 @@ const LogTable: React.FC<LogTableProps> = ({
                                 </td>
 
                                 {/* 3. 模型 (请求模型与真实使用模型) */}
-                                <td style={{ width: `${colWidths.model}px` }} className="py-2.5 px-3 align-middle">
-                                     <div className="flex flex-col gap-0.5 min-w-0">
-                                         <div className="flex items-center gap-1.5 min-w-0" title={`${t('monitor.table.req_model_title', '请求模型')}: ${log.model || '-'}`}>
+                                <td style={{ width: `${colWidths.model}px`, maxWidth: `${colWidths.model}px` }} className="py-2.5 px-3 align-middle overflow-hidden box-border">
+                                     <div className="flex flex-col gap-0.5 min-w-0 max-w-full overflow-hidden">
+                                         <div className="flex items-center gap-1.5 min-w-0 max-w-full" title={`${t('monitor.table.req_model_title', '请求模型')}: ${log.model || '-'}`}>
                                              <span className="text-[10px] font-semibold text-gray-400 dark:text-gray-500 shrink-0 select-none">
                                                  {t('monitor.table.req_prefix', '请求:')}
                                              </span>
@@ -399,7 +387,7 @@ const LogTable: React.FC<LogTableProps> = ({
                                                  {log.model || '-'}
                                              </span>
                                          </div>
-                                         <div className="flex items-center gap-1.5 min-w-0" title={`${t('monitor.table.real_model_title', '真实使用模型')}: ${realModel}`}>
+                                         <div className="flex items-center gap-1.5 min-w-0 max-w-full" title={`${t('monitor.table.real_model_title', '真实使用模型')}: ${realModel}`}>
                                              <span className={`text-[10px] font-semibold shrink-0 select-none ${
                                                  isModelChanged ? 'text-sky-500 dark:text-sky-400 font-bold' : 'text-gray-400 dark:text-gray-500'
                                              }`}>
@@ -415,14 +403,14 @@ const LogTable: React.FC<LogTableProps> = ({
                                  </td>
 
                                  {/* 4. 服务账号 */}
-                                 <td style={{ width: `${colWidths.account}px` }} className="py-2.5 px-3 align-middle">
-                                     <div className="text-gray-700 dark:text-gray-300 font-sans text-xs truncate" title={log.account_email || ''}>
+                                 <td style={{ width: `${colWidths.account}px`, maxWidth: `${colWidths.account}px` }} className="py-2.5 px-3 align-middle overflow-hidden box-border">
+                                     <div className="text-gray-700 dark:text-gray-300 font-sans text-xs truncate max-w-full" title={log.account_email || ''}>
                                          {log.account_email ? log.account_email.replace(/(.{3}).*(@.*)/, '$1***$2') : '-'}
                                      </div>
                                  </td>
 
                                  {/* 5. Token 消耗 (入 / 出 / 缓) */}
-                                 <td style={{ width: `${colWidths.usage}px` }} className="text-right py-2.5 px-3 align-middle whitespace-nowrap">
+                                 <td style={{ width: `${colWidths.usage}px`, maxWidth: `${colWidths.usage}px` }} className="text-right py-2.5 px-3 align-middle overflow-hidden box-border">
                                      {log.input_tokens != null || log.output_tokens != null ? (() => {
                                         const totalIn = (log.cached_tokens && log.cached_tokens > (log.input_tokens || 0))
                                             ? (log.input_tokens || 0) + log.cached_tokens
@@ -435,15 +423,15 @@ const LogTable: React.FC<LogTableProps> = ({
                                             ? (hitRate >= 100 ? '100%' : (hitRate % 1 === 0 ? `${hitRate.toFixed(0)}%` : `${hitRate.toFixed(1)}%`))
                                             : '';
                                         return (
-                                            <div className="flex flex-col items-end gap-0.5">
-                                                <div className="text-gray-800 dark:text-gray-200 text-xs font-mono font-medium">
+                                            <div className="flex flex-col items-end gap-0.5 overflow-hidden max-w-full">
+                                                <div className="text-gray-800 dark:text-gray-200 text-xs font-mono font-medium truncate max-w-full">
                                                     <span title={`${t('monitor.table.in_tokens_title', '输入 Token')}: ${totalIn}`}>{t('monitor.table.in_prefix', '入:')} {formatCompactNumber(totalIn)}</span>
                                                     <span className="mx-1 text-gray-300 dark:text-gray-600">|</span>
                                                     <span title={`${t('monitor.table.out_tokens_title', '输出 Token')}: ${log.output_tokens || 0}`}>{t('monitor.table.out_prefix', '出:')} {formatCompactNumber(log.output_tokens || 0)}</span>
                                                 </div>
                                                 {hasCache ? (
                                                     <div
-                                                        className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-600 dark:text-emerald-400 font-mono"
+                                                        className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-600 dark:text-emerald-400 font-mono truncate max-w-full"
                                                         title={`${t('token_stats.cached', 'Cache')}: ${log.cached_tokens?.toLocaleString()}${hitRateText ? ` (${hitRateText})` : ''}`}
                                                     >
                                                         <span>⚡ {t('monitor.table.cache_prefix', '缓:')}</span>
@@ -451,7 +439,7 @@ const LogTable: React.FC<LogTableProps> = ({
                                                         {hitRateText && <span className="opacity-80">({hitRateText})</span>}
                                                     </div>
                                                 ) : (
-                                                    <div className="text-[11px] text-gray-400 dark:text-gray-500 font-mono">
+                                                    <div className="text-[11px] text-gray-400 dark:text-gray-500 font-mono truncate max-w-full">
                                                         <span>{t('monitor.table.cache_prefix', '缓:')} 0</span>
                                                     </div>
                                                 )}
@@ -463,7 +451,7 @@ const LogTable: React.FC<LogTableProps> = ({
                                 </td>
 
                                 {/* 6. 耗时与首字 (独立列) */}
-                                <td style={{ width: `${colWidths.duration}px` }} className="text-right py-2.5 px-3 align-middle whitespace-nowrap">
+                                <td style={{ width: `${colWidths.duration}px`, maxWidth: `${colWidths.duration}px` }} className="text-right py-2.5 px-3 align-middle overflow-hidden box-border">
                                     {(() => {
                                         const ttftMs = extractTtft(log);
                                         const ttftText = ttftMs != null 
@@ -471,18 +459,18 @@ const LogTable: React.FC<LogTableProps> = ({
                                             : null;
                                         return (
                                             <div 
-                                                className="flex flex-col items-end gap-0.5"
+                                                className="flex flex-col items-end gap-0.5 overflow-hidden max-w-full"
                                                 title={`${t('monitor.table.total_duration_title', '总耗时')}: ${durationText}${ttftText ? ` | ${t('monitor.table.ttft_title', '首字延迟 (TTFT)')}: ${ttftText}` : ''}`}
                                             >
-                                                <span className={`text-xs font-mono font-medium ${durationColor}`}>
+                                                <span className={`text-xs font-mono font-medium truncate max-w-full ${durationColor}`}>
                                                     {durationText}
                                                 </span>
                                                 {ttftText ? (
-                                                    <span className="text-[11px] font-mono text-sky-600 dark:text-sky-400">
+                                                    <span className="text-[11px] font-mono text-sky-600 dark:text-sky-400 truncate max-w-full">
                                                         {t('monitor.table.ttft_prefix', '首字:')} {ttftText}
                                                     </span>
                                                 ) : (
-                                                    <span className="text-[11px] font-mono text-gray-400 dark:text-gray-500">
+                                                    <span className="text-[11px] font-mono text-gray-400 dark:text-gray-500 truncate max-w-full">
                                                         {t('monitor.table.ttft_prefix', '首字:')} -
                                                     </span>
                                                 )}
@@ -492,8 +480,8 @@ const LogTable: React.FC<LogTableProps> = ({
                                 </td>
 
                                 {/* 7. 时间 */}
-                                <td style={{ width: `${colWidths.time}px` }} className="text-right py-2.5 px-3 align-middle">
-                                    <div className="text-gray-500 dark:text-gray-400 text-xs font-mono truncate">
+                                <td style={{ width: `${colWidths.time}px`, maxWidth: `${colWidths.time}px` }} className="text-right py-2.5 px-3 align-middle overflow-hidden box-border">
+                                    <div className="text-gray-500 dark:text-gray-400 text-xs font-mono truncate max-w-full">
                                         {new Date(log.timestamp).toLocaleTimeString()}
                                     </div>
                                 </td>
