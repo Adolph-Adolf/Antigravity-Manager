@@ -3,6 +3,21 @@
 > 完整版本历史记录。返回项目主页请查看 [README_ZH.md](README_ZH.md) | [English Changelog](CHANGELOG_EN.md)。
 
 *   **版本演进**:
+    *   **v4.9.7-beta.11 (2026-10-14)**:
+        -   **[加固切号持久化、配额即时耗尽标记与乐观重置保底] (PR #3664, Fixes #3639, Fixes #3637, Thanks to @modded-soldier-9)**:
+            -   **切号降级闭环加固 (Fixes #3637)**: 在 `integration.rs` 的冷重启与超时降级路径中，确保在彻底杀死主进程后再次调用 `apply_account_credentials`，消除外部客户端退出钩子的回写竞态，彻底杜绝主进程退出覆盖旧 Token。 (PR #3664, Fixes #3637, Thanks to @modded-soldier-9)
+            -   **命令行原始参数大小写保真**: 在 `process.rs` 中保留启动快照参数的原始大小写，仅在比对 helper 辅助进程时内部转小写匹配，彻底根治 Linux / macOS 大小写敏感文件系统下工作区路径被篡改导致打开空工作区或启动报错的问题。 (PR #3664, Thanks to @modded-soldier-9)
+            -   **OpenAI 429 原子快速加锁**: 统一在 `handle_chat_completions` 与 `handle_completions` 中调用 `mark_rate_limited_fast`，在 0ms 内原子锁定内存限流状态，消除 50ms 轮换延时前因实时配额网络请求未完成导致的同一账号竞争重选。 (PR #3664, Thanks to @modded-soldier-9)
+            -   **响应式内存配额耗尽标记 (Fixes #3639)**: 新增 `mark_model_quota_depleted`，在上游判定为 `QuotaExhausted` 或实时配额刷新成功后立即响应式更新 `token.model_quotas` 内存缓存，确保粘性会话与固定账号在下一轮次立刻无感迁移。 (PR #3664, Fixes #3639, Thanks to @modded-soldier-9)
+            -   **乐观重置配额耗尽安全守卫与等待时间向上取整**: 优化 `clear_for_optimistic_reset`，保留所有生效中的 `QuotaExhausted` 记录，且重选候选时优先挑选具备正额度的账号；并在 `rate_limit.rs` 中将剩余等待时长改为向上取整（Ceil），并在缓冲等待加入容差，杜绝提前唤醒与误放行 0% 额度账号。 (PR #3664, Thanks to @modded-soldier-9)
+        -   **[并发感知流量溢出调度与最大溢出账号上限控制] (PR #3662, Thanks to @zepeng-jin)**:
+            -   **在途并发追踪 (InFlightGuard)**: 实现基于 RAII 的在途请求原子计数守卫，绑定到 Claude、Gemini、OpenAI 代理的流式与非流式响应生命周期，精确跟踪每个账号的实时并发负载。 (PR #3662, Thanks to @zepeng-jin)
+            -   **感知并发的流量溢出调度**: 在 P2C 选号算法中，当活跃主账号正在处理在途请求（`in_flight > 0`）时，后续并发请求自动平滑外溢到次高优先级或空闲/低负载账号，打破多会话与多 Agent 并行场景下的队头阻塞；并主动绕过 0% 配额账号以规避 429 报错。 (PR #3662, Thanks to @zepeng-jin)
+            -   **可配置溢出账号上限 (max_spillover_accounts)**: 支持设置并发调度时参与外溢的最大账号数（默认 0 为不限制；N > 0 时最多允许 N 个账号同时参与调度），防止无节制激活过多账号，并在 UI 调度设置面板提供滑动条调节与多语言支持。 (PR #3662, Thanks to @zepeng-jin)
+        -   **[支持分钟级高分辨率 Token 统计与细粒度趋势展示] (PR #3663, Thanks to @zepeng-jin)**:
+            -   **后端分钟级聚合接口**: 在 `token_stats.rs` 中新增 `get_minute_stats`、`get_model_trend_minute` 与 `get_account_trend_minute`，按分钟粒度（`%Y-%m-%d %H:%M`）精准聚合 Token 消耗，支持 1h 与 24h 时间跨度并通过 Tauri IPC 命令暴露。 (PR #3663, Thanks to @zepeng-jin)
+            -   **前端图表分钟粒度多视图适配**: 在 Token 统计页面扩展 `TimeRange` 支持 `'minute'`，提供 1h / 24h 药丸选择器，在 `AppleBentoView` 与 `CyberCockpitView` 中适配 X 轴 `HH:mm` 刻度展示，并同步完整中英文语言包。 (PR #3663, Thanks to @zepeng-jin)
+
     *   **v4.9.7-beta.10 (2026-10-13)**:
         -   **[收紧内部预热端点为仅限本机回环访问] (PR #3660, Fixes #3659, Thanks to @Quirrel-zh)**:
             -   **严格限制 TCP 回环来源访问**: 在 `ip_filter.rs` 中新增 `is_direct_loopback`，仅依据底层 TCP 对端地址（`ConnectInfo`，完整适配 IPv4、IPv6 与 IPv4 映射 IPv6 回环地址）判定是否为本机回环，坚决不读取易被外部伪造的 `X-Forwarded-For` 与 `X-Real-IP` 请求头。 (PR #3660, Fixes #3659, Thanks to @Quirrel-zh)
