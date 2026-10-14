@@ -129,7 +129,7 @@ impl RateLimitTracker {
             .into_iter()
             .filter_map(|key| self.limits.get(key))
             .filter_map(|info| info.reset_time.duration_since(now).ok())
-            .map(|duration| duration.as_secs().max(1))
+            .map(|duration| (duration.as_millis().saturating_add(999) / 1000) as u64)
             .max()
             .unwrap_or(0)
             .max(self.get_quota_wait(account_id, model, false));
@@ -147,7 +147,7 @@ impl RateLimitTracker {
                         .limits
                         .get(&std_key)
                         .and_then(|info| info.reset_time.duration_since(now).ok())
-                        .map(|duration| duration.as_secs().max(1))
+                        .map(|duration| (duration.as_millis().saturating_add(999) / 1000) as u64)
                         .unwrap_or(0)
                         .max(self.get_quota_wait(account_id, Some(&std_id), false));
                     if std_wait > 0 {
@@ -170,7 +170,7 @@ impl RateLimitTracker {
                     && (!weekly_only || entry.weekly)
             })
             .filter_map(|entry| entry.reset_time?.duration_since(now).ok())
-            .map(|duration| duration.as_secs().max(1))
+            .map(|duration| (duration.as_millis().saturating_add(999) / 1000) as u64)
             .max()
             .unwrap_or(0)
     }
