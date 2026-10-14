@@ -3,6 +3,12 @@
 > Complete version history for Antigravity Tools. Return to project home at [README.md](README.md).
 
 *   **Version History**:
+    *   **v4.9.8-beta.0 (2026-10-14)**:
+        -   **[Pure Point-to-Point TTFT Latency Decoupling & Dynamic Multi-Endpoint Fallback Trace]**:
+            -   **Pure Point-to-Point TTFT Measurement**: Decoupled upstream timeout and retry attempts from first-token metrics. Individual timers are now recorded per endpoint in `UpstreamClient`, measuring pure TTFT strictly from the moment the winning endpoint dispatches until the first valid SSE chunk (thinking/tool/content) arrives.
+            -   **Endpoint Fallback Breakdown & Switch Latency Tracking**: Added granular attempt tracking for each fallback hop (endpoint alias, URL, HTTP status code, attempt duration) along with system-level switch dispatch latency (`switch_delay_s`), consolidating prior failure times into `ttft_overhead_s`.
+            -   **Interactive Fallback Timeline in ProxyMonitor**: In the timing diagnostics view, streamlined normal requests to clean single-stage views while dynamically expanding a timeline for degraded requests (displaying each attempt, switch latency, error status, and first-token hit), with multi-stage stacked bar progress and enhanced timing copying.
+
     *   **v4.9.7-beta.11 (2026-10-14)**:
         -   **[Hardened Account-Switch Persistence, Instant Quota Depletion Marking & Safe Optimistic Reset] (PR #3664, Fixes #3639, Fixes #3637, Thanks to @modded-soldier-9)**:
             -   **Account Switch Downgrade Fallback Hardening (Fixes #3637)**: In `integration.rs`, ensured `apply_account_credentials` is called again after fully terminating the main process during cold restart or timeout fallbacks, eliminating race conditions where external client exit hooks could overwrite credentials with stale tokens. (PR #3664, Fixes #3637, Thanks to @modded-soldier-9)

@@ -3,6 +3,12 @@
 > 完整版本历史记录。返回项目主页请查看 [README_ZH.md](README_ZH.md) | [English Changelog](CHANGELOG_EN.md)。
 
 *   **版本演进**:
+    *   **v4.9.8-beta.0 (2026-10-14)**:
+        -   **[纯粹点到点 TTFT 首包耗时拆分与动态多端点 Fallback 链路耗时追踪]**:
+            -   **单端点纯粹点到点 TTFT 计时**: 彻底解耦上游前置失败重试、超时与最终有效首包到达耗时，在底层 `UpstreamClient` 为每一次端点请求建立独立打点，统一以最终生效端点真正发起请求至首个有效数据块（Thinking / Tool / SSE Chunk）到达为纯粹 TTFT 度量标准。
+            -   **端点降级尝试明细与 Fallback 切换延迟追踪**: 细化记录端点尝试链路中的每一项（包含端点别名、URL、HTTP 状态码、单次耗时），并精准捕获上一端点故障到下一端点发起的系统切换与调度延迟（`switch_delay_s`），将前置所有失败损耗汇总为 `ttft_overhead_s`。
+            -   **前端耗时分类诊断动态链路展开**: 在 `ProxyMonitor` 监控面板中，正常直连时保持纯净简洁；触发 Fallback 时自动标记 `[已降级]` 徽章，并在顶部进度条切分出降级损耗分段，卡片内部动态展开多端点尝试时间线（单端点耗时、切换延迟、失败原因及命中标记），一键复制功能同步升级完整链路导出。
+
     *   **v4.9.7-beta.11 (2026-10-14)**:
         -   **[加固切号持久化、配额即时耗尽标记与乐观重置保底] (PR #3664, Fixes #3639, Fixes #3637, Thanks to @modded-soldier-9)**:
             -   **切号降级闭环加固 (Fixes #3637)**: 在 `integration.rs` 的冷重启与超时降级路径中，确保在彻底杀死主进程后再次调用 `apply_account_credentials`，消除外部客户端退出钩子的回写竞态，彻底杜绝主进程退出覆盖旧 Token。 (PR #3664, Fixes #3637, Thanks to @modded-soldier-9)
