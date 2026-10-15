@@ -207,7 +207,7 @@ impl ProxyRequestLog {
             response_body: None,
             request_headers: None,
             upstream_request_headers: None,
-            response_headers: None,
+            response_headers: self.response_headers.clone(),
             input_tokens: self.input_tokens,
             output_tokens: self.output_tokens,
             cached_tokens: self.cached_tokens,
