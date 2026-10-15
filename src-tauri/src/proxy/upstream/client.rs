@@ -123,8 +123,8 @@ const V1_INTERNAL_BASE_URL_SANDBOX: &str =
     "https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal";
 
 pub const V1_INTERNAL_BASE_URL_FALLBACKS: [&str; 3] = [
-    V1_INTERNAL_BASE_URL_DAILY, // 优先级 1: Daily (官方 IDE 原生唯一主力端点，稳定支持思维链与工具调用)
-    V1_INTERNAL_BASE_URL_PROD,  // 优先级 2: Prod (生产集群，全球可用无地域限制)
+    V1_INTERNAL_BASE_URL_PROD, // 优先级 1: Prod (生产集群，全球可用无地域限制，长流式稳定性最高)
+    V1_INTERNAL_BASE_URL_DAILY, // 优先级 2: Daily (官方 IDE 原生主力端点，备用)
     V1_INTERNAL_BASE_URL_SANDBOX, // 优先级 3: Sandbox (沙箱备用；部分非美地区返回 400 地域限制)
 ];
 
@@ -362,8 +362,8 @@ impl UpstreamClient {
             // 1. 实测证实 Google GFE 对客户端 HTTP/2 PING 帧静默丢弃、不回复 PING ACK，
             //    导致 hyper2 在 keep_alive_timeout 到期时本地自杀式掐死连接并抛出 error reading a body from connection；
             // 2. 移除破坏性的底层 HTTP/2 PING 配置，回归 4.8.8 稳态基线；
-            // 3. 依赖标准 L4 TCP Keep-Alive (60s) 保活，下游已有 PR #3578 的 3s SSE 注释心跳防客户端超时。
-            .tcp_keepalive(Duration::from_secs(60)) // TCP 稳态保活探测 (60秒)
+            // 3. 依赖标准 L4 TCP Keep-Alive (30s) 保活，防 NAT / GFE 空闲超时掐断长连接，下游已有 PR #3578 的 3s SSE 注释心跳防客户端超时。
+            .tcp_keepalive(Duration::from_secs(30)) // TCP 稳态保活探测 (从 60s 收紧至 30s)
             // 强制开启 HTTP/2 协议，并支持在 SOCKS/HTTPS 代理下通过 ALPN 强制降级/协商
             .timeout(Duration::from_secs(600));
 
@@ -1164,8 +1164,8 @@ mod tests {
         assert_eq!(
             V1_INTERNAL_BASE_URL_FALLBACKS,
             [
-                V1_INTERNAL_BASE_URL_DAILY,
                 V1_INTERNAL_BASE_URL_PROD,
+                V1_INTERNAL_BASE_URL_DAILY,
                 V1_INTERNAL_BASE_URL_SANDBOX,
             ]
         );

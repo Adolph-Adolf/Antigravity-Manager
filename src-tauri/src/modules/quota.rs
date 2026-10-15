@@ -8,18 +8,18 @@ use serde_json::json;
 //
 // [FIX Issue #3525] Daily 优先，与官方 Antigravity language_server 的出站端点一致。
 // Prod 为官方生产集群，全球可用且无地域限制；
-// Sandbox 在部分地区会对合规账号返回终止性 400 `User location is not supported for the API use.`，保留仅作为兜底。
+// Daily 为原生备用端点；Sandbox 为沙箱兜底。
 const QUOTA_API_ENDPOINTS: [&str; 3] = [
-    "https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels",
     "https://cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels",
+    "https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels",
     "https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal:fetchAvailableModels",
 ];
 
-// Quota Summary API endpoints (weekly + 5h grouped quota, fallback order: Daily → Prod → Sandbox)
-// 顺序理由同上：优先 Daily，次选全球 Prod，沙箱 Sandbox 兜底。
+// Quota Summary API endpoints (weekly + 5h grouped quota, fallback order: Prod → Daily → Sandbox)
+// 优先稳定生产端点 Prod，备用 Daily，沙箱 Sandbox 兜底。
 const QUOTA_SUMMARY_ENDPOINTS: [&str; 3] = [
-    "https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary",
     "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary",
+    "https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary",
     "https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal:retrieveUserQuotaSummary",
 ];
 
@@ -123,11 +123,10 @@ async fn create_long_standard_client(account_id: Option<&str>) -> rquest::Client
     }
 }
 
-// 项目 / 档位解析端点（fallback order: Daily → Prod → Sandbox）
-// [FIX Issue #3525] 与官方 Antigravity language_server 的出站端点保持一致，理由见上文 QUOTA_API_ENDPOINTS。
+// 项目 / 档位解析端点（fallback order: Prod → Daily → Sandbox）
 const CLOUD_CODE_LOAD_PROJECT_ENDPOINTS: [&str; 3] = [
-    "https://daily-cloudcode-pa.googleapis.com/v1internal:loadCodeAssist",
     "https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist",
+    "https://daily-cloudcode-pa.googleapis.com/v1internal:loadCodeAssist",
     "https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal:loadCodeAssist",
 ];
 
@@ -1059,24 +1058,7 @@ mod tests {
             std::time::Duration::from_secs(60),
         );
 
-        // 默认顺序为 Daily -> Sandbox -> Prod
-        assert_eq!(
-            tracker.get_ordered_endpoints(&CLOUD_CODE_LOAD_PROJECT_ENDPOINTS)[0],
-            "https://daily-cloudcode-pa.googleapis.com/v1internal:loadCodeAssist"
-        );
-        assert_eq!(
-            tracker.get_ordered_endpoints(&QUOTA_API_ENDPOINTS)[0],
-            "https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels"
-        );
-        assert_eq!(
-            tracker.get_ordered_endpoints(&QUOTA_SUMMARY_ENDPOINTS)[0],
-            "https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary"
-        );
-
-        // 标记 Daily 故障（如日常请求中发生超时或连接失败）
-        tracker.mark_failure("https://daily-cloudcode-pa.googleapis.com/v1internal:loadCodeAssist");
-
-        // 所有相关接口都应自动跳过 Daily，优先尝试全球可用的 Prod（消除 Sandbox 对非美 IP 的 400 阻断）
+        // 默认顺序为 Prod -> Daily -> Sandbox
         assert_eq!(
             tracker.get_ordered_endpoints(&CLOUD_CODE_LOAD_PROJECT_ENDPOINTS)[0],
             "https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist"
@@ -1090,8 +1072,27 @@ mod tests {
             "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary"
         );
 
-        // 若 Prod 也发生故障，所有接口自动降级到 Sandbox 兜底
-        tracker.mark_failure("https://cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels");
+        // 标记 Prod 故障（如日常请求中发生超时或连接失败）
+        tracker.mark_failure("https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist");
+
+        // 所有相关接口都应自动跳过 Prod，优先尝试备用的 Daily
+        assert_eq!(
+            tracker.get_ordered_endpoints(&CLOUD_CODE_LOAD_PROJECT_ENDPOINTS)[0],
+            "https://daily-cloudcode-pa.googleapis.com/v1internal:loadCodeAssist"
+        );
+        assert_eq!(
+            tracker.get_ordered_endpoints(&QUOTA_API_ENDPOINTS)[0],
+            "https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels"
+        );
+        assert_eq!(
+            tracker.get_ordered_endpoints(&QUOTA_SUMMARY_ENDPOINTS)[0],
+            "https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary"
+        );
+
+        // 若 Daily 也发生故障，所有接口自动降级到 Sandbox 兜底
+        tracker.mark_failure(
+            "https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels",
+        );
         assert_eq!(
             tracker.get_ordered_endpoints(&CLOUD_CODE_LOAD_PROJECT_ENDPOINTS)[0],
             "https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal:loadCodeAssist"
