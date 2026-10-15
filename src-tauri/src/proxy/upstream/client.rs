@@ -123,9 +123,9 @@ const V1_INTERNAL_BASE_URL_SANDBOX: &str =
     "https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal";
 
 pub const V1_INTERNAL_BASE_URL_FALLBACKS: [&str; 3] = [
-    V1_INTERNAL_BASE_URL_PROD, // 优先级 1: Prod (生产集群，全球可用无地域限制，长流式稳定性最高)
-    V1_INTERNAL_BASE_URL_DAILY, // 优先级 2: Daily (官方 IDE 原生主力端点，备用)
-    V1_INTERNAL_BASE_URL_SANDBOX, // 优先级 3: Sandbox (沙箱备用；部分非美地区返回 400 地域限制)
+    V1_INTERNAL_BASE_URL_DAILY, // 优先级 1: Daily (官方 IDE 原生主力端点，毫秒级响应，稳定支持长流式与思维链)
+    V1_INTERNAL_BASE_URL_SANDBOX, // 优先级 2: Sandbox (沙箱备用，极速响应，遇地域限制秒切)
+    V1_INTERNAL_BASE_URL_PROD,  // 优先级 3: Prod (生产集群，大流式易遇 GFE 假死，作为深层兜底)
 ];
 
 /// 提取端点的主机名或规范标识，使不同 API 路径（如 :loadCodeAssist、:fetchAvailableModels、v1internal）
@@ -260,7 +260,7 @@ impl EndpointHealthTracker {
 
 impl Default for EndpointHealthTracker {
     fn default() -> Self {
-        Self::new(std::time::Duration::from_secs(60))
+        Self::new(std::time::Duration::from_secs(300))
     }
 }
 
@@ -677,7 +677,39 @@ impl UpstreamClient {
 
                 let switch_delay_s = last_attempt_failed_at.map(|t| t.elapsed().as_secs_f64());
                 let attempt_start = std::time::Instant::now();
-                let response = req_builder.send().await;
+
+                // [WATCHDOG] 端点级防假死超时：当还有备用候选端点时，设置 12 秒流式预建联/首包超时，
+                // 防止上游故障端点（如 Prod 大流式请求）无响应静默挂起 56 秒阻塞全链路
+                let send_future = req_builder.send();
+                let response = if has_next {
+                    match tokio::time::timeout(std::time::Duration::from_secs(12), send_future)
+                        .await
+                    {
+                        Ok(res) => res,
+                        Err(_) => {
+                            self.endpoint_health.mark_failure(base_url);
+                            last_attempt_failed_at = Some(std::time::Instant::now());
+                            let err_msg = format!(
+                                "HTTP request timed out after 12s waiting for response headers at {} (method={})",
+                                base_url, method
+                            );
+                            tracing::warn!(%err_msg, "Upstream candidate endpoint timed out, fast falling back to next endpoint");
+                            fallback_attempts.push(FallbackAttemptLog {
+                                endpoint_name: parse_endpoint_name(base_url).to_string(),
+                                endpoint_url: url.clone(),
+                                status: None,
+                                duration_s: attempt_start.elapsed().as_secs_f64(),
+                                switch_delay_s,
+                                error: err_msg.clone(),
+                                is_effective: false,
+                            });
+                            last_err = Some(err_msg);
+                            continue;
+                        }
+                    }
+                } else {
+                    send_future.await
+                };
                 let duration_s = attempt_start.elapsed().as_secs_f64();
 
                 match response {
@@ -1160,13 +1192,13 @@ mod tests {
     }
 
     #[test]
-    fn test_v1_internal_fallbacks_order_prioritizes_prod_over_sandbox() {
+    fn test_v1_internal_fallbacks_order_prioritizes_daily_over_sandbox() {
         assert_eq!(
             V1_INTERNAL_BASE_URL_FALLBACKS,
             [
-                V1_INTERNAL_BASE_URL_PROD,
                 V1_INTERNAL_BASE_URL_DAILY,
                 V1_INTERNAL_BASE_URL_SANDBOX,
+                V1_INTERNAL_BASE_URL_PROD,
             ]
         );
     }

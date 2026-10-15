@@ -308,17 +308,16 @@ pub fn determine_retry_strategy_adaptive(
                     || (lower.contains("quota_exhausted")
                         && !lower.contains("resource has been exhausted")));
 
-            // 请求级 429 防穿透保护 (无明确重置时间且非账号硬配额耗尽)：
-            // 在多账号池中，第一轮 (attempt < pool_size) 允许全池每一个可用健康账号均获得 1 次执行机会，
+            // 请求级 429 防早退与极速失败保护 (无明确重置时间且非账号硬配额耗尽)：
+            // 在多账号池中，第一轮 (attempt < pool_size) 允许全池每一个可用健康账号均获得 1 次 50ms 闪电执行机会，
             // 解决大 Prompt 突发并发导致单号瞬态 429 时全池健康账号被过早熔断误杀的问题。
-            // 当第一轮全池遍历均遇 429 时，进入第二轮温和退避（2s~5s，由下方的 FixedDelay 处理），
-            // 吸收 Google Cloud Code PA 的瞬态短窗 TPM 突发，避免在 100ms 内过早抛弃导致客户端进入长达 1 分钟的死等。
-            // 当且仅当两轮轮换均已完整尝试（attempt >= max_attempts）后，终止进一步轮换，防止无限循环打穿全池。
+            // 当第一轮全池遍历后所有账号均遭遇 429（attempt >= pool_size），立即快速失败退出 (NoRetry)，
+            // 坚决杜绝进入漫长的高延迟阶梯退避导致客户端感知近 1 分钟的假死等待。
             let is_request_level_429 = parsed_delay.is_none() && !is_hard_quota_exhausted;
-            let request_level_429_max_attempts = calculate_max_retry_attempts(pool_size);
+            let request_level_429_max_attempts = pool_size.max(1);
             if is_request_level_429 && attempt >= request_level_429_max_attempts {
                 tracing::warn!(
-                    "[Retry] Request-level 429 persisted across full pool after {} attempts without explicit delay; aborting further rotation to prevent cascading load.",
+                    "[Retry] Request-level 429 persisted across full pool after {} attempts without explicit delay; fail-fast aborting to prevent long client stalls.",
                     attempt
                 );
                 return RetryStrategy::NoRetry;

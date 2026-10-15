@@ -244,8 +244,9 @@ fn test_adaptive_retry_request_level_429_rotates_full_pool_then_aborts() {
         );
     }
 
-    // attempt 3 (attempt == pool_size): 全池第一轮闪电切号均遇 429 后，激活第二轮温和退避 (2000ms)，吸收突发流控，绝不立刻抛出 NoRetry 给客户端
-    let s_round2 = determine_retry_strategy_adaptive(
+    // attempt 3 (attempt == pool_size): 全池第一轮闪电切号均遇 429 后，由于无明确重置时间，触发快速失败 (fail-fast)，
+    // 立即返回 NoRetry，绝不进入漫长无谓的高延迟退避导致客户端感知近 1 分钟假死
+    let s_abort = determine_retry_strategy_adaptive(
         429,
         request_level_429,
         None,
@@ -255,23 +256,10 @@ fn test_adaptive_retry_request_level_429_rotates_full_pool_then_aborts() {
         pool_size,
     );
     assert_eq!(
-        s_round2,
-        RetryStrategy::FixedDelay(Duration::from_millis(2000)),
-        "Round 2 attempt 3 should enter gentle linear backoff instead of aborting"
+        s_abort,
+        RetryStrategy::NoRetry,
+        "Request-level 429 should fail-fast abort immediately once full pool exhausted in round 1"
     );
-
-    // attempt >= max_attempts (calculate_max_retry_attempts(3) = 6): 跑满两轮后终止，防止无限循环
-    let max_attempts = crate::proxy::handlers::common::calculate_max_retry_attempts(pool_size);
-    let s_abort = determine_retry_strategy_adaptive(
-        429,
-        request_level_429,
-        None,
-        false,
-        true,
-        max_attempts,
-        pool_size,
-    );
-    assert_eq!(s_abort, RetryStrategy::NoRetry);
 }
 
 #[test]
@@ -337,37 +325,21 @@ fn test_adaptive_retry_google_resource_exhausted_rotates_full_pool_then_aborts()
         );
     }
 
-    // attempt 5 (attempt == pool_size): 全池第一轮尝试完毕后，激活第二轮温和退避 (2000ms)，吸收突发流控
-    let s_round2 = determine_retry_strategy_adaptive(
-        429,
-        google_quota_429,
-        None,
-        false,
-        true,
-        pool_size,
-        pool_size,
-    );
-    assert_eq!(
-        s_round2,
-        RetryStrategy::FixedDelay(Duration::from_millis(2000)),
-        "Round 2 first attempt should enter gentle linear backoff to absorb burst"
-    );
-
-    // attempt >= max_attempts (calculate_max_retry_attempts(5) = 10): 两轮试满后终止
-    let max_attempts = crate::proxy::handlers::common::calculate_max_retry_attempts(pool_size);
+    // attempt 5 (attempt == pool_size): 全池第一轮 50ms 闪电切号均遇 429 后，由于无明确重置时间，触发快速失败 (fail-fast)，
+    // 立即终止重试并返回 NoRetry，绝不进入漫长无谓的高延迟退避
     let s_abort = determine_retry_strategy_adaptive(
         429,
         google_quota_429,
         None,
         false,
         true,
-        max_attempts,
+        pool_size,
         pool_size,
     );
     assert_eq!(
         s_abort,
         RetryStrategy::NoRetry,
-        "Full pool exhausted after max attempts must abort"
+        "Google 429 without explicit delay should fail-fast abort once full pool exhausted in round 1"
     );
 }
 

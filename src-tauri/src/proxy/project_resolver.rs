@@ -1,12 +1,12 @@
 use serde_json::Value;
 
-// loadCodeAssist 端点（fallback order: Prod → Daily → Sandbox）
+// loadCodeAssist 端点（fallback order: Daily → Sandbox → Prod）
 //
-// 优先使用全球生产集群 Prod，避免 Daily 抖动超时与 Sandbox 400 地域限制。
+// 优先使用官方 IDE 主力集群 Daily，沙箱备用，生产集群兜底。
 const LOAD_PROJECT_ENDPOINTS: [&str; 3] = [
-    "https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist",
     "https://daily-cloudcode-pa.googleapis.com/v1internal:loadCodeAssist",
     "https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal:loadCodeAssist",
+    "https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist",
 ];
 
 /// 使用 Antigravity 的 loadCodeAssist API 获取 project_id
@@ -93,32 +93,32 @@ mod tests {
             std::time::Duration::from_secs(60),
         );
 
-        // 默认顺序为 Prod -> Daily -> Sandbox
+        // 默认顺序为 Daily -> Sandbox -> Prod
         assert_eq!(
             tracker.get_ordered_endpoints(&LOAD_PROJECT_ENDPOINTS),
             vec![
-                "https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist",
                 "https://daily-cloudcode-pa.googleapis.com/v1internal:loadCodeAssist",
                 "https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal:loadCodeAssist",
+                "https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist",
             ]
         );
 
-        // 模拟 Prod 故障
-        tracker.mark_failure("https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist");
-        let ordered = tracker.get_ordered_endpoints(&LOAD_PROJECT_ENDPOINTS);
-        assert_eq!(
-            ordered[0],
-            "https://daily-cloudcode-pa.googleapis.com/v1internal:loadCodeAssist"
-        );
-
-        // 模拟 Daily 也故障
-        tracker.mark_failure(
-            "https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent",
-        );
+        // 模拟 Daily 故障
+        tracker.mark_failure("https://daily-cloudcode-pa.googleapis.com/v1internal:loadCodeAssist");
         let ordered = tracker.get_ordered_endpoints(&LOAD_PROJECT_ENDPOINTS);
         assert_eq!(
             ordered[0],
             "https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal:loadCodeAssist"
+        );
+
+        // 模拟 Sandbox 也故障
+        tracker.mark_failure(
+            "https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal:loadCodeAssist",
+        );
+        let ordered = tracker.get_ordered_endpoints(&LOAD_PROJECT_ENDPOINTS);
+        assert_eq!(
+            ordered[0],
+            "https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist"
         );
     }
 }
