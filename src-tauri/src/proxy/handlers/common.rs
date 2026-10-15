@@ -229,7 +229,18 @@ pub fn determine_retry_strategy_adaptive(
 
     let lower = error_text.to_lowercase();
     match status_code {
-        // 400 错误：仅在特定 Thinking 签名失败时重试一次
+        // 400 错误：
+        // 1. 若为 Sandbox 地域限制 (User location is not supported)，允许在多账号/端点间快速重试逃逸至可用节点 (Prod)
+        400 if lower.contains("user location is not supported") && attempt < pool_size => {
+            tracing::warn!(
+                "[Retry] 400 User location is not supported on attempt {}/{}; fast rotating to fallback endpoint/account",
+                attempt + 1,
+                pool_size
+            );
+            RetryStrategy::FixedDelay(Duration::from_millis(50))
+        }
+
+        // 2. 仅在特定 Thinking 签名失败时重试一次
         400 if !retried_without_thinking
             && (lower.contains("invalid thought signature")
                 || lower.contains("invalid `signature`")
@@ -298,16 +309,16 @@ pub fn determine_retry_strategy_adaptive(
                         && !lower.contains("resource has been exhausted")));
 
             // 请求级 429 防穿透保护 (无明确重置时间且非账号硬配额耗尽)：
-            // [FIX #3506] 若遭遇无明确重置时间的请求级 429，最多允许尝试 2 个账号快切逃逸（min(pool_size, 2)）。
-            // 连续 2 个账号失败说明该请求为恶性 Payload、超大 Token 或 IP/提供商级流控，
-            // 必须立即终止进一步轮换，严禁打穿全池导致全池健康账号被锁入 RateLimitExceeded。
+            // 在多账号池中，第一轮 (attempt < pool_size) 允许全池每一个可用健康账号均获得 1 次执行机会，
+            // 解决大 Prompt 突发并发导致单号瞬态 429 时全池健康账号被过早熔断误杀的问题。
+            // 当且仅当全池所有账号均尝试一遍（attempt >= pool_size）后，若无明确延迟则终止进一步轮换，
+            // 避免无限循环打穿全池或重复刷死已限流账号。
             let is_request_level_429 = parsed_delay.is_none() && !is_hard_quota_exhausted;
-            let request_level_429_max_attempts = pool_size.min(2);
+            let request_level_429_max_attempts = pool_size;
             if is_request_level_429 && attempt >= request_level_429_max_attempts {
                 tracing::warn!(
-                    "[Retry] Request-level 429 persisted across {} attempts without explicit delay; aborting further rotation to protect remaining {} accounts.",
-                    attempt,
-                    pool_size.saturating_sub(attempt)
+                    "[Retry] Request-level 429 persisted across full pool ({} attempts) without explicit delay; aborting further rotation to prevent cascading load.",
+                    attempt
                 );
                 return RetryStrategy::NoRetry;
             }
@@ -545,6 +556,10 @@ pub fn should_rotate_account(status_code: u16, strategy: Option<&RetryStrategy>)
         // 这些错误是账号级别或特定节点配额的，需要轮换
         // [FIX #3485] 503/529 边缘节点熔断或特定账号负载过高，多账号时支持轮换逃逸，杜绝死锁死等
         429 | 401 | 403 | 404 | 500 | 503 | 529 => true,
+        // 若为 400 且返回了 50ms 快速退避策略（例如 user location is not supported），需要轮换账号/节点
+        400 if matches!(strategy, Some(RetryStrategy::FixedDelay(d)) if *d == Duration::from_millis(50)) => {
+            true
+        }
         _ => false,
     }
 }

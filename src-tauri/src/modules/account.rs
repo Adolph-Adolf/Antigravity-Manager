@@ -1367,7 +1367,16 @@ pub fn list_accounts() -> Result<Vec<Account>, String> {
 
     for summary in &index.accounts {
         match load_account(&summary.id) {
-            Ok(account) => accounts.push(account),
+            Ok(mut account) => {
+                // [FIX] 对齐 index 与实体文件状态，防止实体文件未同步导致已停用账号逃逸
+                if summary.disabled {
+                    account.disabled = true;
+                }
+                if summary.proxy_disabled {
+                    account.proxy_disabled = true;
+                }
+                accounts.push(account);
+            }
             Err(e) => {
                 crate::modules::logger::log_error(&format!(
                     "Failed to load account {}: {}",

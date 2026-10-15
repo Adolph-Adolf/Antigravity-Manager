@@ -4,24 +4,23 @@ use rquest;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-// Quota API endpoints (fallback order: Daily → Sandbox → Prod)
+// Quota API endpoints (fallback order: Daily → Prod → Sandbox)
 //
 // [FIX Issue #3525] Daily 优先，与官方 Antigravity language_server 的出站端点一致。
-// Sandbox 在部分地区会对合规账号返回终止性 400 `User location is not supported for the API use.`；
-// 本函数的回退条件只覆盖 429 / 5xx，400 会直接终止整轮配额刷新，因此不能让 Sandbox 排首位。
-// 官方从不访问 sandbox 端点；保留它仅作为可用性兜底，回退判定规则不变。
+// Prod 为官方生产集群，全球可用且无地域限制；
+// Sandbox 在部分地区会对合规账号返回终止性 400 `User location is not supported for the API use.`，保留仅作为兜底。
 const QUOTA_API_ENDPOINTS: [&str; 3] = [
     "https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels",
-    "https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal:fetchAvailableModels",
     "https://cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels",
+    "https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal:fetchAvailableModels",
 ];
 
-// Quota Summary API endpoints (weekly + 5h grouped quota, fallback order: Daily → Sandbox → Prod)
-// 顺序理由同上：优先与官方客户端一致的 Daily 端点。
+// Quota Summary API endpoints (weekly + 5h grouped quota, fallback order: Daily → Prod → Sandbox)
+// 顺序理由同上：优先 Daily，次选全球 Prod，沙箱 Sandbox 兜底。
 const QUOTA_SUMMARY_ENDPOINTS: [&str; 3] = [
     "https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary",
-    "https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal:retrieveUserQuotaSummary",
     "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary",
+    "https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal:retrieveUserQuotaSummary",
 ];
 
 /// Critical retry threshold: considered near recovery when quota reaches 95%
@@ -124,12 +123,12 @@ async fn create_long_standard_client(account_id: Option<&str>) -> rquest::Client
     }
 }
 
-// 项目 / 档位解析端点（fallback order: Daily → Sandbox → Prod）
+// 项目 / 档位解析端点（fallback order: Daily → Prod → Sandbox）
 // [FIX Issue #3525] 与官方 Antigravity language_server 的出站端点保持一致，理由见上文 QUOTA_API_ENDPOINTS。
 const CLOUD_CODE_LOAD_PROJECT_ENDPOINTS: [&str; 3] = [
     "https://daily-cloudcode-pa.googleapis.com/v1internal:loadCodeAssist",
-    "https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal:loadCodeAssist",
     "https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist",
+    "https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal:loadCodeAssist",
 ];
 
 /// Fetch project ID and subscription tier
@@ -225,7 +224,9 @@ async fn fetch_project_id(
                         return (project_id, subscription_tier);
                     }
                 } else {
-                    if crate::proxy::upstream::client::should_try_next_endpoint(status) {
+                    if crate::proxy::upstream::client::should_try_next_endpoint_for_url(
+                        status, ep_url,
+                    ) {
                         health_tracker.mark_failure(ep_url);
                     }
                     crate::modules::logger::log_warn(&format!(
@@ -322,7 +323,9 @@ pub async fn fetch_quota_with_cache(
                 if let Err(_) = response.error_for_status_ref() {
                     let status = response.status();
 
-                    if crate::proxy::upstream::client::should_try_next_endpoint(status) {
+                    if crate::proxy::upstream::client::should_try_next_endpoint_for_url(
+                        status, ep_url,
+                    ) {
                         health_tracker.mark_failure(ep_url);
                     }
 
@@ -573,7 +576,9 @@ async fn fetch_quota_summary(
             Ok(response) => {
                 let status = response.status();
                 if !status.is_success() {
-                    if crate::proxy::upstream::client::should_try_next_endpoint(status) {
+                    if crate::proxy::upstream::client::should_try_next_endpoint_for_url(
+                        status, ep_url,
+                    ) {
                         health_tracker.mark_failure(ep_url);
                     }
                     crate::modules::logger::log_warn(&format!(
@@ -1071,24 +1076,7 @@ mod tests {
         // 标记 Daily 故障（如日常请求中发生超时或连接失败）
         tracker.mark_failure("https://daily-cloudcode-pa.googleapis.com/v1internal:loadCodeAssist");
 
-        // 所有相关接口都应自动跳过 Daily，优先尝试 Sandbox
-        assert_eq!(
-            tracker.get_ordered_endpoints(&CLOUD_CODE_LOAD_PROJECT_ENDPOINTS)[0],
-            "https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal:loadCodeAssist"
-        );
-        assert_eq!(
-            tracker.get_ordered_endpoints(&QUOTA_API_ENDPOINTS)[0],
-            "https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal:fetchAvailableModels"
-        );
-        assert_eq!(
-            tracker.get_ordered_endpoints(&QUOTA_SUMMARY_ENDPOINTS)[0],
-            "https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal:retrieveUserQuotaSummary"
-        );
-
-        // 若 Sandbox 也发生故障，所有接口自动降级到 Prod
-        tracker.mark_failure(
-            "https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal:fetchAvailableModels",
-        );
+        // 所有相关接口都应自动跳过 Daily，优先尝试全球可用的 Prod（消除 Sandbox 对非美 IP 的 400 阻断）
         assert_eq!(
             tracker.get_ordered_endpoints(&CLOUD_CODE_LOAD_PROJECT_ENDPOINTS)[0],
             "https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist"
@@ -1100,6 +1088,21 @@ mod tests {
         assert_eq!(
             tracker.get_ordered_endpoints(&QUOTA_SUMMARY_ENDPOINTS)[0],
             "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary"
+        );
+
+        // 若 Prod 也发生故障，所有接口自动降级到 Sandbox 兜底
+        tracker.mark_failure("https://cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels");
+        assert_eq!(
+            tracker.get_ordered_endpoints(&CLOUD_CODE_LOAD_PROJECT_ENDPOINTS)[0],
+            "https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal:loadCodeAssist"
+        );
+        assert_eq!(
+            tracker.get_ordered_endpoints(&QUOTA_API_ENDPOINTS)[0],
+            "https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal:fetchAvailableModels"
+        );
+        assert_eq!(
+            tracker.get_ordered_endpoints(&QUOTA_SUMMARY_ENDPOINTS)[0],
+            "https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal:retrieveUserQuotaSummary"
         );
     }
 }

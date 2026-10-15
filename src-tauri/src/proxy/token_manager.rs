@@ -737,6 +737,46 @@ impl TokenManager {
         let entries =
             std::fs::read_dir(&accounts_dir).map_err(|e| format!("读取账号目录失败: {}", e))?;
 
+        // 读取 accounts.json 索引，过滤掉用户在索引中标记为 disabled 或 proxy_disabled 的账号，防止实体文件残留导致已停用账号渗入代理池
+        let index_file = self.resolved_data_dir().join("accounts.json");
+        let disabled_in_index: std::collections::HashSet<String> = if index_file.exists() {
+            if let Ok(content) = std::fs::read_to_string(&index_file) {
+                if let Ok(index_val) = serde_json::from_str::<serde_json::Value>(&content) {
+                    index_val
+                        .get("accounts")
+                        .and_then(|a| a.as_array())
+                        .map(|accs| {
+                            accs.iter()
+                                .filter_map(|acc| {
+                                    let is_disabled = acc
+                                        .get("disabled")
+                                        .and_then(|v| v.as_bool())
+                                        .unwrap_or(false);
+                                    let is_proxy_disabled = acc
+                                        .get("proxy_disabled")
+                                        .and_then(|v| v.as_bool())
+                                        .unwrap_or(false);
+                                    if is_disabled || is_proxy_disabled {
+                                        acc.get("id")
+                                            .and_then(|v| v.as_str())
+                                            .map(|s| s.to_string())
+                                    } else {
+                                        None
+                                    }
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default()
+                } else {
+                    std::collections::HashSet::new()
+                }
+            } else {
+                std::collections::HashSet::new()
+            }
+        } else {
+            std::collections::HashSet::new()
+        };
+
         let mut count = 0;
 
         for entry in entries {
@@ -747,6 +787,18 @@ impl TokenManager {
             let path = entry.path();
 
             if path.extension().and_then(|s| s.to_str()) != Some("json") {
+                continue;
+            }
+
+            let stem = path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or_default();
+            if disabled_in_index.contains(stem) {
+                tracing::info!(
+                    "[Proxy] Account {} is marked disabled/proxy_disabled in accounts.json index, skipping from proxy pool",
+                    stem
+                );
                 continue;
             }
 
@@ -772,6 +824,36 @@ impl TokenManager {
 
     /// 重新加载指定账号（用于配额更新后的实时同步）
     pub async fn reload_account(&self, account_id: &str) -> Result<(), String> {
+        // [FIX] 优先检查 accounts.json 索引，若已标记 disabled 或 proxy_disabled，直接从内存代理池移除
+        let index_file = self.resolved_data_dir().join("accounts.json");
+        if index_file.exists() {
+            if let Ok(content) = std::fs::read_to_string(&index_file) {
+                if let Ok(index_val) = serde_json::from_str::<serde_json::Value>(&content) {
+                    let is_disabled = index_val
+                        .get("accounts")
+                        .and_then(|a| a.as_array())
+                        .map(|accs| {
+                            accs.iter().any(|acc| {
+                                acc.get("id").and_then(|v| v.as_str()) == Some(account_id)
+                                    && (acc
+                                        .get("disabled")
+                                        .and_then(|v| v.as_bool())
+                                        .unwrap_or(false)
+                                        || acc
+                                            .get("proxy_disabled")
+                                            .and_then(|v| v.as_bool())
+                                            .unwrap_or(false))
+                            })
+                        })
+                        .unwrap_or(false);
+                    if is_disabled {
+                        self.remove_account(account_id);
+                        return Ok(());
+                    }
+                }
+            }
+        }
+
         let path = self
             .data_dir
             .join("accounts")
