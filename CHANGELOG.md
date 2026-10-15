@@ -3,6 +3,14 @@
 > 完整版本历史记录。返回项目主页请查看 [README_ZH.md](README_ZH.md) | [English Changelog](CHANGELOG_EN.md)。
 
 *   **版本演进**:
+    *   **v4.9.8-beta.5 (2026-10-15)**:
+        -   **[配额与模型发现 UA 切换为 Hub 官方标识与动态版本号注入] (Ref #3665, Thanks to @wd2es7)**:
+            -   **配额刷新与模型探活 UA 全面切换为 Hub 标识**: 解决 ULTRA 账号无法探知并调度 `gemini-4-argon` 系列模型的问题。根据社区贡献者 (@wd2es7) 定位线索并经官方 Antigravity 桌面端二进制逆向及真实上游抓包验证，Google 服务端依客户端 `subclient_type` 执行白名单模型门禁（`ide`/`vscode` 过滤 Argon 仅下发 35 个模型，而 `hub`/`cli` 下发包含 Argon 在内的 38 个完整模型目录）。将 `quota.rs` 中的 `fetch_project_id`、`fetch_quota_with_cache` 及 `fetch_quota_summary` 的请求头统一收敛为官方 `antigravity/hub` 规范。 (Ref #3665, Thanks to @wd2es7)
+            -   **动态集成应用版本与操作系统指纹**: 废除 `constants::USER_AGENT` 中硬编码的 `2.17.0` 版本号，重构为 `build_official_upstream_user_agent()` 动态读取当前项目实时版本（如 `4.9.8-beta.5`）及运行平台（darwin/linux/windows 及 arm64/x64），确保上游请求标识与发布版本严格原子同步。 (Ref #3665)
+            -   **官方模型目录补齐与下限对齐**: 在内置模型兜底表 `official_models.json` 中补齐 `gemini-4-argon` 官方定义，对齐官方元数据标称的 `minThinkingBudget: 32`。 (Ref #3665)
+        -   **[Gemini 4 Argon 运行时思考预算下限保护与 400 报错防护] (Ref #3665)**:
+            -   **执行层思考预算下限硬保护 (≥ 1024)**: 经上游真实请求验证，Google 官方对 Gemini 4 (Argon) 施加了未在元数据中公开的运行期限制——当 `thinkingBudget < 1024`（且非 0）时，上游接口将直接抛出 `400 Thinking level is unsupported: THINKING_LEVEL_MINIMAL`。为此，在管线入站 `inbound.rs` 与档位计算 `model_specs.rs` 中将 `gemini-4-argon-low` 及客户端传入的低预算安全钳位在 `1024`，彻底规避上游 400 崩溃。 (Ref #3665)
+
     *   **v4.9.8-beta.4 (2026-10-15)**:
         -   **[实时流量日志响应头保全与首字延迟秒级即显修复]**:
             -   **实时通知保留响应头透传**: 修复 `ProxyRequestLog::summary` 在广播轻量化事件时误将 `response_headers` 清空，导致前端通过 SSE/Tauri 事件实时接收新日志时无法提取 `X-Timing-Ttft-Ms`、盯住屏幕首字显示为空白（`-`）直到切回页面才刷出的问题。

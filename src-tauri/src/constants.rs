@@ -223,8 +223,8 @@ pub const OFFICIAL_HUB_VERSION: &str = "2.17.0";
 pub const OFFICIAL_HUB_CL: &str = "986210228";
 
 /// Returns the official Antigravity Hub User-Agent matching the upstream egress signature:
-/// format: "antigravity/hub/{OFFICIAL_HUB_VERSION} (aidev_client; os_type={os}; arch={arch}; cl={OFFICIAL_HUB_CL})"
-/// e.g.: "antigravity/hub/2.17.0 (aidev_client; os_type=windows; arch=amd64; cl=986210228)"
+/// format: "antigravity/hub/{version} (aidev_client; os_type={os}; arch={arch}; cl={OFFICIAL_HUB_CL})"
+/// e.g.: "antigravity/hub/4.9.8-beta.4 (aidev_client; os_type=windows; arch=amd64; cl=986210228)"
 pub fn build_official_upstream_user_agent() -> String {
     let os_type = match std::env::consts::OS {
         "windows" => "windows",
@@ -239,7 +239,10 @@ pub fn build_official_upstream_user_agent() -> String {
     };
     format!(
         "antigravity/hub/{} (aidev_client; os_type={}; arch={}; cl={})",
-        OFFICIAL_HUB_VERSION, os_type, arch, OFFICIAL_HUB_CL
+        CURRENT_VERSION.as_str(),
+        os_type,
+        arch,
+        OFFICIAL_HUB_CL
     )
 }
 

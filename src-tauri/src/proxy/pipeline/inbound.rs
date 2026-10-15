@@ -1235,7 +1235,17 @@ impl InboundThinkingPipeline {
                         "thinkingBudget": 0
                     });
                 } else {
-                    tc["thinkingBudget"] = json!(budget);
+                    let effective_budget =
+                        if (crate::proxy::model_specs::is_gemini_v4_or_above(target_model)
+                            || target_model.to_lowercase().contains("argon"))
+                            && budget > 0
+                            && budget < 1024
+                        {
+                            1024
+                        } else {
+                            budget
+                        };
+                    tc["thinkingBudget"] = json!(effective_budget);
                 }
             } else if is_tiered {
                 // Tiered 模型未指定具体数字 budget 且官方结构体无 thinking_budget 时：纯自适应模式

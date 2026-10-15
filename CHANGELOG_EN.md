@@ -3,6 +3,14 @@
 > Complete version history for Antigravity Tools. Return to project home at [README.md](README.md).
 
 *   **Version History**:
+    *   **v4.9.8-beta.5 (2026-10-15)**:
+        -   **[Switch Quota & Model Discovery UA to Official Hub Identity with Dynamic Versioning] (Ref #3665, Thanks to @wd2es7)**:
+            -   **Switch Upstream Discovery UA to Hub Subclient**: Fixed an issue where ULTRA accounts could not discover or route `gemini-4-argon` models. Following community insights from @wd2es7 and reverse engineering of `/Applications/Antigravity.app`, verified that Google gates Argon availability based on the client `subclient_type` in the User-Agent (`ide`/`vscode` filters out Argon yielding 35 models, whereas `hub`/`cli` returns all 38 models including Argon). Consolidated `fetch_project_id`, `fetch_quota_with_cache`, and `fetch_quota_summary` to official `antigravity/hub` UA. (Ref #3665, Thanks to @wd2es7)
+            -   **Dynamic Versioning & OS Fingerprint**: Eliminated hardcoded version `2.17.0` in `constants::USER_AGENT`, replacing it with `build_official_upstream_user_agent()` which dynamically embeds the current app version (e.g. `4.9.8-beta.5`) and host architecture/platform (darwin/linux/windows and arm64/x64), ensuring upstream headers stay synchronized with releases. (Ref #3665)
+            -   **Official Model Catalog Alignment**: Registered `gemini-4-argon` in offline fallback `official_models.json` aligned with upstream `minThinkingBudget: 32` metadata. (Ref #3665)
+        -   **[Gemini 4 Argon Runtime Thinking Budget Safeguard & 400 Error Mitigation] (Ref #3665)**:
+            -   **Runtime Minimum Thinking Budget Guard (≥ 1024)**: Upstream verification revealed that despite Google's metadata indicating `minThinkingBudget: 32`, sending any non-zero thinking budget $< 1024$ to `generateContent` triggers `400 Thinking level is unsupported: THINKING_LEVEL_MINIMAL`. Added an inbound pipeline clamp in `inbound.rs` and aligned `gemini-4-argon-low` in `model_specs.rs` to enforce a runtime floor of `1024`, completely preventing upstream 400 failures. (Ref #3665)
+
     *   **v4.9.8-beta.4 (2026-10-15)**:
         -   **[Real-Time Event Header Retention & Instant TTFT Rendering Fix]**:
             -   **Retain Response Headers in Event Broadcast**: Fixed an issue where `ProxyRequestLog::summary` stripped `response_headers` during real-time event broadcasting, preventing the frontend from extracting `X-Timing-Ttft-Ms` dynamically and causing first-token metrics to show as empty ("-") until the view was refreshed.

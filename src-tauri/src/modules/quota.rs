@@ -155,7 +155,7 @@ async fn fetch_project_id(
             .header(rquest::header::CONTENT_TYPE, "application/json")
             .header(
                 rquest::header::USER_AGENT,
-                crate::constants::NATIVE_OAUTH_USER_AGENT.as_str(),
+                crate::constants::USER_AGENT.as_str(),
             )
             .json(&meta)
             .send()
@@ -311,7 +311,7 @@ pub async fn fetch_quota_with_cache(
             .bearer_auth(access_token)
             .header(
                 rquest::header::USER_AGENT,
-                crate::constants::NATIVE_OAUTH_USER_AGENT.as_str(),
+                crate::constants::USER_AGENT.as_str(),
             )
             .json(&payload)
             .send()
@@ -563,7 +563,7 @@ async fn fetch_quota_summary(
             .bearer_auth(access_token)
             .header(
                 rquest::header::USER_AGENT,
-                crate::constants::NATIVE_OAUTH_USER_AGENT.as_str(),
+                crate::constants::USER_AGENT.as_str(),
             )
             .json(&payload)
             .send()

@@ -87,6 +87,9 @@ pub fn get_thinking_budget(model_id: &str, _token: Option<&ProxyToken>) -> u64 {
         return 1000; // extra-low 规范预算
     }
     if lower.contains("low") {
+        if is_gemini_v4_or_above(&std_id) || lower.contains("argon") {
+            return 1024; // Gemini 4 (Argon) 思考预算下限必须 >= 1024，防止触发 THINKING_LEVEL_MINIMAL 400
+        }
         if !is_lightweight {
             return 1001; // 高级模型 low 规范预算
         }
@@ -950,6 +953,11 @@ mod tests {
         assert_eq!(get_thinking_budget("gemini-3.1-pro-high", None), 10001);
         assert_eq!(get_thinking_budget("gemini-pro-agent", None), 10001);
         assert_eq!(get_thinking_budget("gemini-3.1-pro-low", None), 1001);
+
+        // Gemini 4 Argon 系列
+        assert_eq!(get_thinking_budget("gemini-4-argon-high", None), 10001);
+        assert_eq!(get_thinking_budget("gemini-4-argon-medium", None), 4000);
+        assert_eq!(get_thinking_budget("gemini-4-argon-low", None), 1024);
     }
 
     #[test]
