@@ -3,6 +3,11 @@
 > Complete version history for Antigravity Tools. Return to project home at [README.md](README.md).
 
 *   **Version History**:
+    *   **v4.9.8-beta.4 (2026-10-15)**:
+        -   **[Real-Time Event Header Retention & Instant TTFT Rendering Fix]**:
+            -   **Retain Response Headers in Event Broadcast**: Fixed an issue where `ProxyRequestLog::summary` stripped `response_headers` during real-time event broadcasting, preventing the frontend from extracting `X-Timing-Ttft-Ms` dynamically and causing first-token metrics to show as empty ("-") until the view was refreshed.
+            -   **Lightweight Real-Time Delivery**: Kept heavy request and response bodies stripped while retaining lightweight response headers, ensuring zero IPC latency while rendering first-token timings instantly upon request completion.
+
     *   **v4.9.8-beta.3 (2026-10-15)**:
         -   **[Non-Streaming TTFT Header Hydration, Raw Upstream Error Transparency & Pure Native Timing UI]**:
             -   **Non-Streaming TTFT Measurement Coverage**: Fixed missing `X-Timing-Ttft-Ms` in Claude non-streaming responses (such as prompt compaction summaries) that caused empty ("-") first-token values in the log table; added dual-source TTFT extraction ensuring 100% TTFT availability across all streaming and non-streaming calls.
