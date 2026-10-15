@@ -244,14 +244,31 @@ fn test_adaptive_retry_request_level_429_rotates_full_pool_then_aborts() {
         );
     }
 
-    // attempt 3 (attempt >= pool_size): 全池均已尝试 1 次且无明确重置延迟，终止进一步轮换，防止级联风暴
-    let s_abort = determine_retry_strategy_adaptive(
+    // attempt 3 (attempt == pool_size): 全池第一轮闪电切号均遇 429 后，激活第二轮温和退避 (2000ms)，吸收突发流控，绝不立刻抛出 NoRetry 给客户端
+    let s_round2 = determine_retry_strategy_adaptive(
         429,
         request_level_429,
         None,
         false,
         true,
         pool_size,
+        pool_size,
+    );
+    assert_eq!(
+        s_round2,
+        RetryStrategy::FixedDelay(Duration::from_millis(2000)),
+        "Round 2 attempt 3 should enter gentle linear backoff instead of aborting"
+    );
+
+    // attempt >= max_attempts (calculate_max_retry_attempts(3) = 6): 跑满两轮后终止，防止无限循环
+    let max_attempts = crate::proxy::handlers::common::calculate_max_retry_attempts(pool_size);
+    let s_abort = determine_retry_strategy_adaptive(
+        429,
+        request_level_429,
+        None,
+        false,
+        true,
+        max_attempts,
         pool_size,
     );
     assert_eq!(s_abort, RetryStrategy::NoRetry);
@@ -320,8 +337,8 @@ fn test_adaptive_retry_google_resource_exhausted_rotates_full_pool_then_aborts()
         );
     }
 
-    // attempt 5 (attempt >= pool_size): 全池尝试完毕后，终止进一步轮换，防止无限死循环
-    let s_abort = determine_retry_strategy_adaptive(
+    // attempt 5 (attempt == pool_size): 全池第一轮尝试完毕后，激活第二轮温和退避 (2000ms)，吸收突发流控
+    let s_round2 = determine_retry_strategy_adaptive(
         429,
         google_quota_429,
         None,
@@ -331,9 +348,26 @@ fn test_adaptive_retry_google_resource_exhausted_rotates_full_pool_then_aborts()
         pool_size,
     );
     assert_eq!(
+        s_round2,
+        RetryStrategy::FixedDelay(Duration::from_millis(2000)),
+        "Round 2 first attempt should enter gentle linear backoff to absorb burst"
+    );
+
+    // attempt >= max_attempts (calculate_max_retry_attempts(5) = 10): 两轮试满后终止
+    let max_attempts = crate::proxy::handlers::common::calculate_max_retry_attempts(pool_size);
+    let s_abort = determine_retry_strategy_adaptive(
+        429,
+        google_quota_429,
+        None,
+        false,
+        true,
+        max_attempts,
+        pool_size,
+    );
+    assert_eq!(
         s_abort,
         RetryStrategy::NoRetry,
-        "Full pool exhausted without explicit delay must abort"
+        "Full pool exhausted after max attempts must abort"
     );
 }
 

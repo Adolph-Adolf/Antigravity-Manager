@@ -795,11 +795,38 @@ impl TokenManager {
                 .and_then(|s| s.to_str())
                 .unwrap_or_default();
             if disabled_in_index.contains(stem) {
-                tracing::info!(
-                    "[Proxy] Account {} is marked disabled/proxy_disabled in accounts.json index, skipping from proxy pool",
-                    stem
-                );
-                continue;
+                // 实体文件是账号状态的真实权威来源。先检查实体文件，若实体文件本身未停用（索引数据陈旧），以实体文件为准；
+                // 仅当实体文件确实标记为停用或不可读时才跳过。
+                let is_truly_disabled = if let Ok(content) = std::fs::read_to_string(&path) {
+                    if let Ok(acc_json) = serde_json::from_str::<serde_json::Value>(&content) {
+                        let is_disabled = acc_json
+                            .get("disabled")
+                            .and_then(|v| v.as_bool())
+                            .unwrap_or(false);
+                        let is_proxy_disabled = acc_json
+                            .get("proxy_disabled")
+                            .and_then(|v| v.as_bool())
+                            .unwrap_or(false);
+                        is_disabled || is_proxy_disabled
+                    } else {
+                        true
+                    }
+                } else {
+                    true
+                };
+
+                if is_truly_disabled {
+                    tracing::info!(
+                        "[Proxy] Account {} is confirmed disabled/proxy_disabled in both index and entity, skipping from proxy pool",
+                        stem
+                    );
+                    continue;
+                } else {
+                    tracing::warn!(
+                        "[Proxy] Account {} was marked disabled in index but is enabled in entity file; trusting entity file",
+                        stem
+                    );
+                }
             }
 
             // 尝试加载账号
@@ -824,7 +851,18 @@ impl TokenManager {
 
     /// 重新加载指定账号（用于配额更新后的实时同步）
     pub async fn reload_account(&self, account_id: &str) -> Result<(), String> {
-        // [FIX] 优先检查 accounts.json 索引，若已标记 disabled 或 proxy_disabled，直接从内存代理池移除
+        let path = self
+            .data_dir
+            .join("accounts")
+            .join(format!("{}.json", account_id));
+        if !path.exists() {
+            self.remove_account(account_id);
+            return Err(format!("账号文件不存在: {:?}", path));
+        }
+
+        // 实体文件是账号状态的真实权威来源。
+        // 若 accounts.json 索引标记了停用，且实体文件也确实停用，则快速从内存池移除；
+        // 若实体文件未停用（索引发生漂移），则以实体文件为准继续加载。
         let index_file = self.resolved_data_dir().join("accounts.json");
         if index_file.exists() {
             if let Ok(content) = std::fs::read_to_string(&index_file) {
@@ -846,20 +884,15 @@ impl TokenManager {
                             })
                         })
                         .unwrap_or(false);
-                    if is_disabled {
+                    if is_disabled
+                        && Self::get_account_state_on_disk(&path).await
+                            == OnDiskAccountState::Disabled
+                    {
                         self.remove_account(account_id);
                         return Ok(());
                     }
                 }
             }
-        }
-
-        let path = self
-            .data_dir
-            .join("accounts")
-            .join(format!("{}.json", account_id));
-        if !path.exists() {
-            return Err(format!("账号文件不存在: {:?}", path));
         }
 
         match self.load_single_account(&path).await {
