@@ -484,7 +484,7 @@ fn extract_thinking_hint(body: &Value) -> ThinkingHint {
         hint.budget_tokens = Some(budget as u32);
     }
 
-    // Try to extract level from thinkingLevel / reasoning_effort / output_config.effort / thinking.effort
+    // Try to extract level from thinkingLevel / reasoning_effort / output_config.effort / thinking.effort / effort
     if let Some(level) = body
         .get("thinkingLevel")
         .or_else(|| body.get("thinking_level"))
@@ -492,6 +492,7 @@ fn extract_thinking_hint(body: &Value) -> ThinkingHint {
         .or_else(|| body.get("reasoningEffort"))
         .or_else(|| body.get("output_config").and_then(|o| o.get("effort")))
         .or_else(|| body.get("thinking").and_then(|t| t.get("effort")))
+        .or_else(|| body.get("effort"))
         .and_then(|l| l.as_str())
     {
         hint.level = Some(level.to_lowercase());
@@ -1949,14 +1950,27 @@ pub async fn handle_messages(
         // [FIX #765/1522] Prepare Robust Beta Headers for Claude models
         let mut extra_headers = std::collections::HashMap::new();
         extra_headers.insert("x-session-id".to_string(), client_session_id.clone());
+
+        // 统一合并客户端传入的 anthropic-beta 与官方必需的 beta 声明，确保 1M 上下文、thinking、effort 等新特性透传至上游
+        let mut beta_set: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        if let Some(client_beta) = headers.get("anthropic-beta").and_then(|v| v.to_str().ok()) {
+            for item in client_beta.split(',') {
+                let trimmed = item.trim();
+                if !trimmed.is_empty() {
+                    beta_set.insert(trimmed.to_string());
+                }
+            }
+        }
         if mapped_model.to_lowercase().contains("claude") {
-            extra_headers.insert(
-                "anthropic-beta".to_string(),
-                "claude-code-20250219".to_string(),
-            );
+            beta_set.insert("claude-code-20250219".to_string());
+        }
+        if !beta_set.is_empty() {
+            let combined_beta = beta_set.into_iter().collect::<Vec<_>>().join(",");
+            extra_headers.insert("anthropic-beta".to_string(), combined_beta);
             tracing::debug!(
-                "[{}] Added Comprehensive Beta Headers for Claude model",
-                trace_id
+                "[{}] Added Comprehensive Beta Headers for Claude model: {:?}",
+                trace_id,
+                extra_headers.get("anthropic-beta")
             );
         }
 
