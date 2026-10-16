@@ -77,6 +77,14 @@ pub fn canonicalize_claude_client_model_id(input: &str) -> String {
             id = rest.to_string();
         }
     }
+    // [NEW Claude Code 2.1.293] 去除方括号上下文窗口后缀（如 [1m], [200k], [128k] 等）
+    if let Some(bracket_idx) = id.find('[') {
+        if let Some(close_idx) = id[bracket_idx..].find(']') {
+            let before = &id[..bracket_idx];
+            let after = &id[bracket_idx + close_idx + 1..];
+            id = format!("{}{}", before, after);
+        }
+    }
     if id.contains("claude-open-") {
         id = id.replace("claude-open-", "claude-opus-");
     }
@@ -132,6 +140,15 @@ pub fn canonicalize_claude_client_model_id(input: &str) -> String {
             if !rest.starts_with(|c: char| c.is_ascii_digit()) {
                 out = format!("claude-{}-5-5-{}", family, rest);
             }
+        }
+    }
+
+    // 兼容 Claude 5 Fable 及其反向写法 (claude-5-fable -> claude-fable-5)
+    if out == "claude-5-fable" {
+        out = "claude-fable-5".to_string();
+    } else if let Some(rest) = out.strip_prefix("claude-5-fable-") {
+        if !rest.starts_with(|c: char| c.is_ascii_digit()) {
+            out = format!("claude-fable-5-{}", rest);
         }
     }
 
@@ -1367,6 +1384,22 @@ mod tests {
         assert_eq!(
             canonicalize_claude_client_model_id("claude-opus-5-low"),
             "claude-opus-5-5-low"
+        );
+        assert_eq!(
+            canonicalize_claude_client_model_id("claude-fable-5[1m]"),
+            "claude-fable-5"
+        );
+        assert_eq!(
+            canonicalize_claude_client_model_id("claude-opus-5[1m]"),
+            "claude-opus-5-5"
+        );
+        assert_eq!(
+            canonicalize_claude_client_model_id("claude-5-fable"),
+            "claude-fable-5"
+        );
+        assert_eq!(
+            canonicalize_claude_client_model_id("anthropic/claude-fable-5[1m]"),
+            "claude-fable-5"
         );
     }
 

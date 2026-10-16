@@ -737,6 +737,46 @@ impl TokenManager {
         let entries =
             std::fs::read_dir(&accounts_dir).map_err(|e| format!("读取账号目录失败: {}", e))?;
 
+        // 读取 accounts.json 索引，过滤掉用户在索引中标记为 disabled 或 proxy_disabled 的账号，防止实体文件残留导致已停用账号渗入代理池
+        let index_file = self.resolved_data_dir().join("accounts.json");
+        let disabled_in_index: std::collections::HashSet<String> = if index_file.exists() {
+            if let Ok(content) = std::fs::read_to_string(&index_file) {
+                if let Ok(index_val) = serde_json::from_str::<serde_json::Value>(&content) {
+                    index_val
+                        .get("accounts")
+                        .and_then(|a| a.as_array())
+                        .map(|accs| {
+                            accs.iter()
+                                .filter_map(|acc| {
+                                    let is_disabled = acc
+                                        .get("disabled")
+                                        .and_then(|v| v.as_bool())
+                                        .unwrap_or(false);
+                                    let is_proxy_disabled = acc
+                                        .get("proxy_disabled")
+                                        .and_then(|v| v.as_bool())
+                                        .unwrap_or(false);
+                                    if is_disabled || is_proxy_disabled {
+                                        acc.get("id")
+                                            .and_then(|v| v.as_str())
+                                            .map(|s| s.to_string())
+                                    } else {
+                                        None
+                                    }
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default()
+                } else {
+                    std::collections::HashSet::new()
+                }
+            } else {
+                std::collections::HashSet::new()
+            }
+        } else {
+            std::collections::HashSet::new()
+        };
+
         let mut count = 0;
 
         for entry in entries {
@@ -748,6 +788,45 @@ impl TokenManager {
 
             if path.extension().and_then(|s| s.to_str()) != Some("json") {
                 continue;
+            }
+
+            let stem = path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or_default();
+            if disabled_in_index.contains(stem) {
+                // 实体文件是账号状态的真实权威来源。先检查实体文件，若实体文件本身未停用（索引数据陈旧），以实体文件为准；
+                // 仅当实体文件确实标记为停用或不可读时才跳过。
+                let is_truly_disabled = if let Ok(content) = std::fs::read_to_string(&path) {
+                    if let Ok(acc_json) = serde_json::from_str::<serde_json::Value>(&content) {
+                        let is_disabled = acc_json
+                            .get("disabled")
+                            .and_then(|v| v.as_bool())
+                            .unwrap_or(false);
+                        let is_proxy_disabled = acc_json
+                            .get("proxy_disabled")
+                            .and_then(|v| v.as_bool())
+                            .unwrap_or(false);
+                        is_disabled || is_proxy_disabled
+                    } else {
+                        true
+                    }
+                } else {
+                    true
+                };
+
+                if is_truly_disabled {
+                    tracing::info!(
+                        "[Proxy] Account {} is confirmed disabled/proxy_disabled in both index and entity, skipping from proxy pool",
+                        stem
+                    );
+                    continue;
+                } else {
+                    tracing::warn!(
+                        "[Proxy] Account {} was marked disabled in index but is enabled in entity file; trusting entity file",
+                        stem
+                    );
+                }
             }
 
             // 尝试加载账号
@@ -777,7 +856,43 @@ impl TokenManager {
             .join("accounts")
             .join(format!("{}.json", account_id));
         if !path.exists() {
+            self.remove_account(account_id);
             return Err(format!("账号文件不存在: {:?}", path));
+        }
+
+        // 实体文件是账号状态的真实权威来源。
+        // 若 accounts.json 索引标记了停用，且实体文件也确实停用，则快速从内存池移除；
+        // 若实体文件未停用（索引发生漂移），则以实体文件为准继续加载。
+        let index_file = self.resolved_data_dir().join("accounts.json");
+        if index_file.exists() {
+            if let Ok(content) = std::fs::read_to_string(&index_file) {
+                if let Ok(index_val) = serde_json::from_str::<serde_json::Value>(&content) {
+                    let is_disabled = index_val
+                        .get("accounts")
+                        .and_then(|a| a.as_array())
+                        .map(|accs| {
+                            accs.iter().any(|acc| {
+                                acc.get("id").and_then(|v| v.as_str()) == Some(account_id)
+                                    && (acc
+                                        .get("disabled")
+                                        .and_then(|v| v.as_bool())
+                                        .unwrap_or(false)
+                                        || acc
+                                            .get("proxy_disabled")
+                                            .and_then(|v| v.as_bool())
+                                            .unwrap_or(false))
+                            })
+                        })
+                        .unwrap_or(false);
+                    if is_disabled
+                        && Self::get_account_state_on_disk(&path).await
+                            == OnDiskAccountState::Disabled
+                    {
+                        self.remove_account(account_id);
+                        return Ok(());
+                    }
+                }
+            }
         }
 
         match self.load_single_account(&path).await {

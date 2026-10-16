@@ -561,6 +561,62 @@ mod tests {
     }
 
     #[test]
+    fn test_list_accounts_synchronizes_index_drift_from_entity() {
+        let _guard = SHARED_TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dir = TestDataDir::new();
+        std::env::set_var("ABV_DATA_DIR", dir.path());
+
+        create_account_file(dir.path(), "acc-drift", "drift@example.com");
+        let now = chrono::Utc::now().timestamp();
+        let index = AccountIndex {
+            version: "2.0".to_string(),
+            accounts: vec![AccountSummary {
+                id: "acc-drift".to_string(),
+                email: "drift@example.com".to_string(),
+                name: Some("Drift User".to_string()),
+                disabled: true,
+                proxy_disabled: true,
+                protected_models: HashSet::new(),
+                created_at: now,
+                last_used: now,
+            }],
+            current_account_id: Some("acc-drift".to_string()),
+            current_target_ide: None,
+        };
+        save_account_index_in_dir(dir.path(), &index).unwrap();
+
+        let accounts = list_accounts().unwrap();
+        assert_eq!(accounts.len(), 1);
+        assert!(
+            !accounts[0].disabled,
+            "Account must remain enabled as in entity file"
+        );
+        assert!(
+            !accounts[0].proxy_disabled,
+            "Account proxy must remain enabled as in entity file"
+        );
+
+        let loaded_index = load_account_index_in_dir(dir.path()).unwrap();
+        let summary = loaded_index
+            .accounts
+            .iter()
+            .find(|a| a.id == "acc-drift")
+            .unwrap();
+        assert!(
+            !summary.disabled,
+            "Index disabled flag must be synced from entity"
+        );
+        assert!(
+            !summary.proxy_disabled,
+            "Index proxy_disabled flag must be synced from entity"
+        );
+
+        std::env::remove_var("ABV_DATA_DIR");
+    }
+
+    #[test]
     fn test_backup_created_on_parse_failure() {
         let _guard = SHARED_TEST_ENV_LOCK
             .lock()
@@ -1362,12 +1418,24 @@ pub fn update_account_priority(account_id: &str, priority: u8) -> Result<(), Str
 /// List all accounts
 pub fn list_accounts() -> Result<Vec<Account>, String> {
     crate::modules::logger::log_info("Listing accounts...");
-    let index = load_account_index()?;
+    let mut index = load_account_index()?;
     let mut accounts = Vec::new();
+    let mut index_dirty = false;
 
-    for summary in &index.accounts {
+    for summary in &mut index.accounts {
         match load_account(&summary.id) {
-            Ok(account) => accounts.push(account),
+            Ok(account) => {
+                // 实体文件是账号状态的权威来源。若索引中的停用状态与实体文件发生漂移，以实体文件为准并同步修正索引
+                if summary.disabled != account.disabled {
+                    summary.disabled = account.disabled;
+                    index_dirty = true;
+                }
+                if summary.proxy_disabled != account.proxy_disabled {
+                    summary.proxy_disabled = account.proxy_disabled;
+                    index_dirty = true;
+                }
+                accounts.push(account);
+            }
             Err(e) => {
                 crate::modules::logger::log_error(&format!(
                     "Failed to load account {}: {}",
@@ -1378,6 +1446,10 @@ pub fn list_accounts() -> Result<Vec<Account>, String> {
                 // This prevents account loss during version upgrades or temporary FS issues.
             }
         }
+    }
+
+    if index_dirty {
+        let _ = save_account_index(&index);
     }
 
     if let Err(error) = crate::modules::token_stats::populate_weekly_usage(&mut accounts) {
@@ -2202,6 +2274,8 @@ pub fn update_account_quota(account_id: &str, quota: QuotaData) -> Result<(), St
         if let Ok(mut index) = load_account_index() {
             if let Some(summary) = index.accounts.iter_mut().find(|a| a.id == account_id) {
                 summary.protected_models = account.protected_models.clone();
+                summary.proxy_disabled = account.proxy_disabled;
+                summary.disabled = account.disabled;
                 let _ = save_account_index(&index);
             }
         }

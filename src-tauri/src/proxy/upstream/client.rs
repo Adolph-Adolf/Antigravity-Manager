@@ -123,9 +123,9 @@ const V1_INTERNAL_BASE_URL_SANDBOX: &str =
     "https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal";
 
 pub const V1_INTERNAL_BASE_URL_FALLBACKS: [&str; 3] = [
-    V1_INTERNAL_BASE_URL_DAILY, // 优先级 1: Daily (官方 IDE 原生唯一主力端点，稳定支持思维链与工具调用)
-    V1_INTERNAL_BASE_URL_SANDBOX, // 优先级 2: Sandbox (沙箱备用；部分地区对合规账号返回终止性 400)
-    V1_INTERNAL_BASE_URL_PROD,  // 优先级 3: Prod (生产兜底，易触发 429)
+    V1_INTERNAL_BASE_URL_DAILY, // 优先级 1: Daily (官方 IDE 原生主力端点，毫秒级响应，稳定支持长流式与思维链)
+    V1_INTERNAL_BASE_URL_SANDBOX, // 优先级 2: Sandbox (沙箱备用，极速响应，遇地域限制秒切)
+    V1_INTERNAL_BASE_URL_PROD,  // 优先级 3: Prod (生产集群，大流式易遇 GFE 假死，作为深层兜底)
 ];
 
 /// 提取端点的主机名或规范标识，使不同 API 路径（如 :loadCodeAssist、:fetchAvailableModels、v1internal）
@@ -145,6 +145,13 @@ pub fn extract_endpoint_host(url_or_host: &str) -> &str {
 /// 判断 HTTP 状态码是否属于应当尝试下一个候选端点的临时/可重试故障。
 pub fn should_try_next_endpoint(status: StatusCode) -> bool {
     UpstreamClient::should_try_next_endpoint(status)
+}
+
+/// 判断特定端点在特定状态码下是否可重试或回退。
+/// 特别针对 Sandbox 沙箱端点：非美 IP 会返回 400 Bad Request (FAILED_PRECONDITION: User location is not supported)，
+/// 此时必须标记该端点失败并快速回退到 Prod 生产端点。
+pub fn should_try_next_endpoint_for_url(status: StatusCode, endpoint_url: &str) -> bool {
+    UpstreamClient::should_try_next_endpoint_for_url(status, endpoint_url)
 }
 
 /// 端点健康追踪器：记录故障端点与冷却期，动态优化上游端点 Fallback 顺序，避免无状态重复踩坑。
@@ -253,7 +260,7 @@ impl EndpointHealthTracker {
 
 impl Default for EndpointHealthTracker {
     fn default() -> Self {
-        Self::new(std::time::Duration::from_secs(60))
+        Self::new(std::time::Duration::from_secs(300))
     }
 }
 
@@ -355,8 +362,8 @@ impl UpstreamClient {
             // 1. 实测证实 Google GFE 对客户端 HTTP/2 PING 帧静默丢弃、不回复 PING ACK，
             //    导致 hyper2 在 keep_alive_timeout 到期时本地自杀式掐死连接并抛出 error reading a body from connection；
             // 2. 移除破坏性的底层 HTTP/2 PING 配置，回归 4.8.8 稳态基线；
-            // 3. 依赖标准 L4 TCP Keep-Alive (60s) 保活，下游已有 PR #3578 的 3s SSE 注释心跳防客户端超时。
-            .tcp_keepalive(Duration::from_secs(60)) // TCP 稳态保活探测 (60秒)
+            // 3. 依赖标准 L4 TCP Keep-Alive (30s) 保活，防 NAT / GFE 空闲超时掐断长连接，下游已有 PR #3578 的 3s SSE 注释心跳防客户端超时。
+            .tcp_keepalive(Duration::from_secs(30)) // TCP 稳态保活探测 (从 60s 收紧至 30s)
             // 强制开启 HTTP/2 协议，并支持在 SOCKS/HTTPS 代理下通过 ALPN 强制降级/协商
             .timeout(Duration::from_secs(600));
 
@@ -480,6 +487,14 @@ impl UpstreamClient {
         status == StatusCode::REQUEST_TIMEOUT
             || status == StatusCode::NOT_FOUND
             || status.is_server_error()
+    }
+
+    /// Determine if we should try next endpoint considering endpoint-specific characteristics.
+    /// Specifically: Sandbox cluster rejects non-US IPs with 400 Bad Request (FAILED_PRECONDITION).
+    /// When this occurs on a sandbox endpoint, we must rotate to Prod instead of returning 400 to the client.
+    pub fn should_try_next_endpoint_for_url(status: StatusCode, endpoint_url: &str) -> bool {
+        Self::should_try_next_endpoint(status)
+            || (status == StatusCode::BAD_REQUEST && endpoint_url.contains("sandbox"))
     }
 
     /// Call v1internal API (Basic Method)
@@ -662,7 +677,39 @@ impl UpstreamClient {
 
                 let switch_delay_s = last_attempt_failed_at.map(|t| t.elapsed().as_secs_f64());
                 let attempt_start = std::time::Instant::now();
-                let response = req_builder.send().await;
+
+                // [WATCHDOG] 端点级防假死超时：当还有备用候选端点时，设置 12 秒流式预建联/首包超时，
+                // 防止上游故障端点（如 Prod 大流式请求）无响应静默挂起 56 秒阻塞全链路
+                let send_future = req_builder.send();
+                let response = if has_next {
+                    match tokio::time::timeout(std::time::Duration::from_secs(12), send_future)
+                        .await
+                    {
+                        Ok(res) => res,
+                        Err(_) => {
+                            self.endpoint_health.mark_failure(base_url);
+                            last_attempt_failed_at = Some(std::time::Instant::now());
+                            let err_msg = format!(
+                                "HTTP request timed out after 12s waiting for response headers at {} (method={})",
+                                base_url, method
+                            );
+                            tracing::warn!(%err_msg, "Upstream candidate endpoint timed out, fast falling back to next endpoint");
+                            fallback_attempts.push(FallbackAttemptLog {
+                                endpoint_name: parse_endpoint_name(base_url).to_string(),
+                                endpoint_url: url.clone(),
+                                status: None,
+                                duration_s: attempt_start.elapsed().as_secs_f64(),
+                                switch_delay_s,
+                                error: err_msg.clone(),
+                                is_effective: false,
+                            });
+                            last_err = Some(err_msg);
+                            continue;
+                        }
+                    }
+                } else {
+                    send_future.await
+                };
                 let duration_s = attempt_start.elapsed().as_secs_f64();
 
                 match response {
@@ -733,7 +780,7 @@ impl UpstreamClient {
                         }
 
                         // 如果有下一个端点且当前错误可重试，则切换
-                        if has_next && Self::should_try_next_endpoint(status) {
+                        if has_next && Self::should_try_next_endpoint_for_url(status, base_url) {
                             self.endpoint_health.mark_failure(base_url);
                             last_attempt_failed_at = Some(std::time::Instant::now());
                             let raw_body = resp.text().await.unwrap_or_default();
@@ -917,9 +964,9 @@ impl UpstreamClient {
                 let text = response.text().await.unwrap_or_default();
                 last_error = format!("{} returned {}: {}", url, status, text);
 
-                // 与主请求路径同一判定：仅 408 / 404 / 5xx 换端点；
-                // 其余状态（如 400）说明请求本身有问题，直接终止，不做三倍重试。
-                if !Self::should_try_next_endpoint(status) {
+                // 与主请求路径同一判定：408 / 404 / 5xx 以及 sandbox 400 换端点；
+                // 其余状态说明请求本身有问题，直接终止，不做无效重试。
+                if !Self::should_try_next_endpoint_for_url(status, base_url) {
                     tracing::error!(
                         error = %last_error,
                         "Auxiliary v1internal request failed with non-retryable status (non-server fault)"
@@ -1142,5 +1189,50 @@ mod tests {
         // 模拟 prod 成功
         tracker.mark_success("https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist");
         assert!(tracker.is_healthy("https://cloudcode-pa.googleapis.com/v1internal"));
+    }
+
+    #[test]
+    fn test_v1_internal_fallbacks_order_prioritizes_daily_over_sandbox() {
+        assert_eq!(
+            V1_INTERNAL_BASE_URL_FALLBACKS,
+            [
+                V1_INTERNAL_BASE_URL_DAILY,
+                V1_INTERNAL_BASE_URL_SANDBOX,
+                V1_INTERNAL_BASE_URL_PROD,
+            ]
+        );
+    }
+
+    #[test]
+    fn test_should_try_next_endpoint_for_url() {
+        use rquest::StatusCode;
+
+        // 标准可重试状态码（所有端点均适用）
+        assert!(should_try_next_endpoint_for_url(
+            StatusCode::REQUEST_TIMEOUT,
+            "https://cloudcode-pa.googleapis.com/v1internal"
+        ));
+        assert!(should_try_next_endpoint_for_url(
+            StatusCode::NOT_FOUND,
+            "https://daily-cloudcode-pa.googleapis.com/v1internal"
+        ));
+        assert!(should_try_next_endpoint_for_url(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal"
+        ));
+
+        // 400 Bad Request：仅在 Sandbox 端点标记为可重试以回退 Prod，非 Sandbox 端点直接终止
+        assert!(should_try_next_endpoint_for_url(
+            StatusCode::BAD_REQUEST,
+            "https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal"
+        ));
+        assert!(!should_try_next_endpoint_for_url(
+            StatusCode::BAD_REQUEST,
+            "https://daily-cloudcode-pa.googleapis.com/v1internal"
+        ));
+        assert!(!should_try_next_endpoint_for_url(
+            StatusCode::BAD_REQUEST,
+            "https://cloudcode-pa.googleapis.com/v1internal"
+        ));
     }
 }
