@@ -1559,6 +1559,39 @@ pub struct CoreModel {
 /// 导出网关全量核心模型（仅剔除带 -日期数字 的后缀版本）
 pub fn get_core_gateway_models() -> &'static [CoreModel] {
     &[
+        // Claude 5 系列 (256k 上下文)
+        CoreModel {
+            id: "claude-fable-5",
+            context_window: 256_000,
+        },
+        CoreModel {
+            id: "claude-fable-5-thinking",
+            context_window: 256_000,
+        },
+        CoreModel {
+            id: "claude-opus-5-5",
+            context_window: 256_000,
+        },
+        CoreModel {
+            id: "claude-opus-5-5-thinking",
+            context_window: 256_000,
+        },
+        CoreModel {
+            id: "claude-sonnet-5-5",
+            context_window: 256_000,
+        },
+        CoreModel {
+            id: "claude-sonnet-5-5-thinking",
+            context_window: 256_000,
+        },
+        CoreModel {
+            id: "claude-haiku-5-5",
+            context_window: 256_000,
+        },
+        CoreModel {
+            id: "claude-haiku-5-5-thinking",
+            context_window: 256_000,
+        },
         // Claude 系列 (256k 上下文)
         CoreModel {
             id: "claude-sonnet-4-6",
@@ -2038,6 +2071,10 @@ model = "deepseek-chat"
 
         // 验证核心模型已添加
         let models = doc.get("models").unwrap().as_table().unwrap();
+        assert!(models.contains_key("claude-fable-5"));
+        assert!(models.contains_key("claude-opus-5-5"));
+        assert!(models.contains_key("claude-sonnet-5-5"));
+        assert!(models.contains_key("claude-haiku-5-5"));
         assert!(models.contains_key("claude-sonnet-4-6"));
         assert!(models.contains_key("claude-opus-4-6"));
         assert!(models.contains_key("gemini-3.8-flash"));
