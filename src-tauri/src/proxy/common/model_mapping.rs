@@ -509,6 +509,88 @@ pub async fn get_all_dynamic_models(
     sorted_ids
 }
 
+/// 去除模型展示名称中的档位括号后缀 (如 "Gemini 3.1 Pro (Low)" -> "Gemini 3.1 Pro")
+pub fn clean_tier_from_display_name(dn: &str) -> String {
+    let re_patterns = [
+        " (Tiered)",
+        " (Max)",
+        " (XHigh)",
+        " (High)",
+        " (Medium)",
+        " (Default)",
+        " (Low)",
+        " (Extra Low)",
+        " (Preview)",
+    ];
+    let mut res = dn.to_string();
+    for pat in &re_patterns {
+        res = res.replace(pat, "");
+    }
+    res
+}
+
+/// 动态获取所有可用模型的元数据字典
+///
+/// 聚合逻辑：
+/// 1. 获取所有账号的 Quota 动态元数据 (TokenManager::get_all_model_metadata)
+/// 2. 剥离分档后缀（-high/-medium/-low/-tiered 等），自动让派生裸模型继承能力元数据
+/// 3. 从官方权威模型目录（OfficialModelCatalog）补充/合并权威元数据
+/// 4. 自定义映射（custom_mapping）继承其目标模型的元数据
+pub async fn get_all_dynamic_models_metadata(
+    custom_mapping: &tokio::sync::RwLock<std::collections::HashMap<String, String>>,
+    token_manager: Option<&crate::proxy::token_manager::TokenManager>,
+    only_raw_quota_models: bool,
+) -> std::collections::HashMap<String, crate::models::quota::ModelListingMeta> {
+    let mut meta_map = if let Some(tm) = token_manager {
+        tm.get_all_model_metadata()
+    } else {
+        std::collections::HashMap::new()
+    };
+
+    // 动态档位后缀剥离与裸模型元数据派生继承
+    let mut derived_metas = std::collections::HashMap::new();
+    for (name, meta) in &meta_map {
+        for suffix in &["-tiered", "-high", "-medium", "-low", "-extra-low"] {
+            if let Some(base) = name.strip_suffix(suffix) {
+                if !base.is_empty() && is_model_compliant_with_baseline(base) {
+                    let mut m = meta.clone();
+                    if let Some(ref dn) = m.display_name {
+                        m.display_name = Some(clean_tier_from_display_name(dn));
+                    }
+                    derived_metas.entry(base.to_string()).or_insert(m);
+                }
+            }
+        }
+    }
+    for (k, v) in derived_metas {
+        meta_map.entry(k).or_insert(v);
+    }
+
+    if !only_raw_quota_models {
+        // 从官方权威目录补充缺失的元数据
+        for m in get_supported_models() {
+            if let Some(official) = crate::models::OfficialModelCatalog::get(&m) {
+                let official_meta = crate::models::quota::ModelListingMeta::from(&official);
+                meta_map.entry(m).or_default().merge_from(&official_meta);
+            }
+        }
+
+        // 自定义映射模型继承目标模型的元数据
+        let mapping = custom_mapping.read().await;
+        for (alias, target) in mapping.iter() {
+            let target_lower = target.to_lowercase();
+            if let Some(target_meta) = meta_map.get(&target_lower).cloned() {
+                meta_map.entry(alias.clone()).or_insert(target_meta);
+            } else if let Some(official) = crate::models::OfficialModelCatalog::get(target) {
+                let official_meta = crate::models::quota::ModelListingMeta::from(&official);
+                meta_map.entry(alias.clone()).or_insert(official_meta);
+            }
+        }
+    }
+
+    meta_map
+}
+
 /// 动态查找指定的模型。
 /// 支持处理 "models/" 前缀，优先精确匹配，兜底大小写不敏感匹配。
 pub async fn find_dynamic_model(
@@ -811,6 +893,11 @@ pub fn strip_tier_suffix(model: &str) -> String {
 
 pub fn normalize_to_standard_id(model_name: &str) -> Option<String> {
     let lower = model_name.to_lowercase();
+
+    // 0. Gemini 4 Argon 系列（独立配额组与独立计费桶，所有档位变体如 high/medium/low/thinking 均归一化为基底 ID）
+    if lower.contains("argon") {
+        return Some("gemini-4-argon".to_string());
+    }
 
     // 1. Image resources must keep Flash image and Pro image in separate quota buckets.
     // The quota API exposes `gemini-3.1-flash-image` separately, so grouping it under
@@ -1454,5 +1541,56 @@ mod tests {
             normalize_to_standard_id("claude"),
             Some("claude".to_string())
         );
+    }
+
+    #[test]
+    fn test_normalize_to_standard_id_argon_unified_pool() {
+        // Gemini 4 Argon 系列独立计费与熔断，统一归一化为 'gemini-4-argon' 标准桶
+        assert_eq!(
+            normalize_to_standard_id("gemini-4-argon-high"),
+            Some("gemini-4-argon".to_string())
+        );
+        assert_eq!(
+            normalize_to_standard_id("gemini-4-argon-medium"),
+            Some("gemini-4-argon".to_string())
+        );
+        assert_eq!(
+            normalize_to_standard_id("gemini-4-argon-low"),
+            Some("gemini-4-argon".to_string())
+        );
+        assert_eq!(
+            normalize_to_standard_id("gemini-4-argon-thinking"),
+            Some("gemini-4-argon".to_string())
+        );
+        assert_eq!(
+            normalize_to_standard_id("gemini-4-argon"),
+            Some("gemini-4-argon".to_string())
+        );
+    }
+
+    #[test]
+    fn test_clean_tier_from_display_name() {
+        assert_eq!(
+            clean_tier_from_display_name("Gemini 3.1 Pro (Low)"),
+            "Gemini 3.1 Pro"
+        );
+        assert_eq!(
+            clean_tier_from_display_name("Claude 3.7 Sonnet (High)"),
+            "Claude 3.7 Sonnet"
+        );
+        assert_eq!(
+            clean_tier_from_display_name("Gemini 3.7 Flash"),
+            "Gemini 3.7 Flash"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_get_all_dynamic_models_metadata_derives_bare_models() {
+        let custom = tokio::sync::RwLock::new(std::collections::HashMap::new());
+        let meta_map = get_all_dynamic_models_metadata(&custom, None, false).await;
+        // 验证能从内置官方目录成功提取模型元数据
+        if let Some(flash_meta) = meta_map.get("gemini-2.5-flash") {
+            assert!(flash_meta.display_name.is_some() || flash_meta.supports_images.is_some());
+        }
     }
 }

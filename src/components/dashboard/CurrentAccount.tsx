@@ -34,10 +34,13 @@ function CurrentAccount({ account, onSwitch }: CurrentAccountProps) {
         tier
     );
 
-    const isGroupProtected = (key: 'gemini' | 'claude') => {
+    const isGroupProtected = (key: 'gemini' | 'claude' | 'argon') => {
         if (!account.protected_models || account.protected_models.length === 0) return false;
+        if (key === 'argon') {
+            return account.protected_models.some(m => m.toLowerCase().includes('argon'));
+        }
         if (key === 'gemini') {
-            return account.protected_models.some(m => m.toLowerCase().includes('gemini'));
+            return account.protected_models.some(m => m.toLowerCase().includes('gemini') && !m.toLowerCase().includes('argon'));
         }
         return account.protected_models.some(m => m.toLowerCase().includes('claude') || m.toLowerCase().includes('gpt'));
     };
@@ -89,16 +92,32 @@ function CurrentAccount({ account, onSwitch }: CurrentAccountProps) {
                     )}
                 </div>
 
-                {/* 统一分组展示: Gemini 与 Claude/第三方 */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 my-auto">
-                    {groupSummaries.map((summary) => (
-                        <GroupQuotaCard
-                            key={summary.key}
-                            summary={summary}
-                            isProtected={isGroupProtected(summary.key)}
-                            liveLimit={summary.key === 'gemini' ? getLiveLimitForModel(account, 'gemini-pro') : getLiveLimitForModel(account, 'claude')}
-                        />
-                    ))}
+                {/* 统一分组展示: Gemini、Claude/第三方以及专属 Gemini 4 Argon */}
+                <div className="flex flex-col gap-2 my-auto">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        {groupSummaries.filter(s => s.key !== 'argon').map((summary) => (
+                            <GroupQuotaCard
+                                key={summary.key}
+                                summary={summary}
+                                isProtected={isGroupProtected(summary.key)}
+                                liveLimit={summary.key === 'gemini' ? getLiveLimitForModel(account, 'gemini-pro') : getLiveLimitForModel(account, 'claude')}
+                            />
+                        ))}
+                    </div>
+                    {(() => {
+                        const argon = groupSummaries.find(s => s.key === 'argon');
+                        if (!argon) return null;
+                        return (
+                            <div className="w-full">
+                                <GroupQuotaCard
+                                    summary={argon}
+                                    isProtected={isGroupProtected('argon')}
+                                    liveLimit={getLiveLimitForModel(account, 'gemini-4-argon')}
+                                    fullWidth
+                                />
+                            </div>
+                        );
+                    })()}
                 </div>
 
                 {onSwitch && (

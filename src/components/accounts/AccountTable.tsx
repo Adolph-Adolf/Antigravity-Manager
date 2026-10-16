@@ -127,10 +127,12 @@ interface AccountRowContentProps {
 // 辅助函数
 // ============================================================================
 
-function isGroupProtected(protectedModels: string[] | undefined, groupKey: 'gemini' | 'claude'): boolean {
+function isGroupProtected(protectedModels: string[] | undefined, groupKey: 'gemini' | 'claude' | 'argon'): boolean {
     if (!protectedModels || protectedModels.length === 0) return false;
-    if (groupKey === 'gemini') {
-        return protectedModels.some(m => m.toLowerCase().startsWith('gemini'));
+    if (groupKey === 'argon') {
+        return protectedModels.some(m => m.toLowerCase().includes('argon'));
+    } else if (groupKey === 'gemini') {
+        return protectedModels.some(m => m.toLowerCase().startsWith('gemini') && !m.toLowerCase().includes('argon'));
     } else {
         return protectedModels.some(m => m.toLowerCase().startsWith('claude') || m.toLowerCase().startsWith('gpt'));
     }
@@ -477,16 +479,33 @@ function AccountRowContent({
                         </button>
                     </div>
                 ) : (
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 py-0">
-                        {groupSummaries.map((summary) => (
-                            <GroupQuotaCard
-                                key={summary.key}
-                                summary={summary}
-                                isProtected={Boolean(config?.quota_protection?.enabled && isGroupProtected(account.protected_models, summary.key))}
-                                liveLimit={summary.key === 'gemini' ? getLiveLimitForModel(account, 'gemini-pro') : getLiveLimitForModel(account, 'claude')}
-                                compact
-                            />
-                        ))}
+                    <div className="flex flex-col gap-1.5 py-0">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+                            {groupSummaries.filter(s => s.key !== 'argon').map((summary) => (
+                                <GroupQuotaCard
+                                    key={summary.key}
+                                    summary={summary}
+                                    isProtected={Boolean(config?.quota_protection?.enabled && isGroupProtected(account.protected_models, summary.key))}
+                                    liveLimit={summary.key === 'gemini' ? getLiveLimitForModel(account, 'gemini-pro') : getLiveLimitForModel(account, 'claude')}
+                                    compact
+                                />
+                            ))}
+                        </div>
+                        {(() => {
+                            const argon = groupSummaries.find(s => s.key === 'argon');
+                            if (!argon) return null;
+                            return (
+                                <div className="w-full">
+                                    <GroupQuotaCard
+                                        summary={argon}
+                                        isProtected={Boolean(config?.quota_protection?.enabled && isGroupProtected(account.protected_models, 'argon'))}
+                                        liveLimit={getLiveLimitForModel(account, 'gemini-4-argon')}
+                                        compact
+                                        fullWidth
+                                    />
+                                </div>
+                            );
+                        })()}
                     </div>
                 )}
             </td>

@@ -20,6 +20,7 @@ function getBucketPercentage(
 
     for (const group of quotaGroups) {
         const name = (group.display_name || '').toLowerCase();
+        if (name.includes('argon')) continue;
         const isTarget = category === 'claude'
             ? (name.includes('claude') || name.includes('gpt'))
             : (name.includes('gemini') || !name.includes('claude'));

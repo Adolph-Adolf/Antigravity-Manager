@@ -67,13 +67,16 @@ function AccountCard({ account, selected, onSelect, isCurrent: propIsCurrent, is
         return getGroupQuotaSummaries(account.quota?.quota_groups, account.quota?.models, tier);
     }, [account.quota?.quota_groups, account.quota?.models, tier]);
 
-    const isGroupProtected = (key: 'gemini' | 'claude') => {
+    const isGroupProtected = (key: 'gemini' | 'claude' | 'argon') => {
         if (!config?.quota_protection?.enabled) return false;
         if (!account.protected_models || account.protected_models.length === 0) return false;
+        if (key === 'argon') {
+            return account.protected_models.some(m => m.toLowerCase().includes('argon'));
+        }
         if (key === 'gemini') {
-            return account.protected_models.some(m => m.startsWith('gemini'));
+            return account.protected_models.some(m => m.toLowerCase().startsWith('gemini') && !m.toLowerCase().includes('argon'));
         } else {
-            return account.protected_models.some(m => m.startsWith('claude') || m.startsWith('gpt'));
+            return account.protected_models.some(m => m.toLowerCase().startsWith('claude') || m.toLowerCase().startsWith('gpt'));
         }
     };
 
@@ -188,15 +191,15 @@ function AccountCard({ account, selected, onSelect, isCurrent: propIsCurrent, is
 
             {/* 配额展示 (统一分组展示) */}
             <div className="flex-1 px-1 mb-2 overflow-y-auto scrollbar-none">
-                {isDisabled || account.quota?.is_forbidden || account.proxy_disabled || account.validation_blocked ? (
+                {isDisabled || account.quota?.is_forbidden || account.validation_blocked ? (
                     <div className="flex flex-wrap items-center justify-center gap-x-3 gap-y-1 h-full py-4 text-center">
                         <div className={cn(
                             "flex items-center gap-1.5",
                             account.validation_blocked ? "text-amber-600 dark:text-amber-400" : "text-red-600 dark:text-red-400"
                         )}>
-                            {account.validation_blocked ? <Clock className="w-4 h-4" /> : (isDisabled || account.proxy_disabled ? <Ban className="w-4 h-4" /> : <Lock className="w-4 h-4" />)}
+                            {account.validation_blocked ? <Clock className="w-4 h-4" /> : (isDisabled ? <Ban className="w-4 h-4" /> : <Lock className="w-4 h-4" />)}
                             <span className="text-[11px] font-bold">
-                                {account.validation_blocked ? validationBlockedLabel : (isDisabled ? t('accounts.status.disabled') : account.proxy_disabled ? t('accounts.status.proxy_disabled') : t('accounts.forbidden_msg'))}
+                                {account.validation_blocked ? validationBlockedLabel : (isDisabled ? t('accounts.status.disabled') : t('accounts.forbidden_msg'))}
                             </span>
                         </div>
                         <div className={cn(
@@ -211,15 +214,31 @@ function AccountCard({ account, selected, onSelect, isCurrent: propIsCurrent, is
                         </button>
                     </div>
                 ) : (
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 content-start">
-                        {groupSummaries.map((summary) => (
-                            <GroupQuotaCard
-                                key={summary.key}
-                                summary={summary}
-                                isProtected={isGroupProtected(summary.key)}
-                                liveLimit={summary.key === 'gemini' ? getLiveLimitForModel(account, 'gemini-pro') : getLiveLimitForModel(account, 'claude')}
-                            />
-                        ))}
+                    <div className="flex flex-col gap-1.5 content-start">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                            {groupSummaries.filter(s => s.key !== 'argon').map((summary) => (
+                                <GroupQuotaCard
+                                    key={summary.key}
+                                    summary={summary}
+                                    isProtected={isGroupProtected(summary.key)}
+                                    liveLimit={summary.key === 'gemini' ? getLiveLimitForModel(account, 'gemini-pro') : getLiveLimitForModel(account, 'claude')}
+                                />
+                            ))}
+                        </div>
+                        {(() => {
+                            const argon = groupSummaries.find(s => s.key === 'argon');
+                            if (!argon) return null;
+                            return (
+                                <div className="w-full">
+                                    <GroupQuotaCard
+                                        summary={argon}
+                                        isProtected={isGroupProtected('argon')}
+                                        liveLimit={getLiveLimitForModel(account, 'gemini-4-argon')}
+                                        fullWidth
+                                    />
+                                </div>
+                            );
+                        })()}
                     </div>
                 )}
             </div>

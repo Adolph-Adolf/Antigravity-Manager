@@ -1190,6 +1190,19 @@
             },
             "agent_settings": {
                 "title": "Özel Agent Ayarları (Specific Agent Settings)"
+            },
+            "hub": {
+                "title": "Resmi Hub İstemci Parmak İzi",
+                "tooltip": "429 kota aşımını önlemek için giden trafiği resmi Google Antigravity Hub imzalarıyla eşleştirir.",
+                "source_custom": "Özel",
+                "source_remote": "Uzak Algılandı",
+                "source_local": "Yerel Uygulama",
+                "source_baseline": "Temel",
+                "detect_button": "Algıla",
+                "detect_success": "Resmi Hub başarıyla algılandı ve senkronize edildi: v{{version}} (CL: {{cl}})",
+                "detect_failed": "Algılama başarısız: {{error}}",
+                "version_label": "Hub Sürümü",
+                "cl_label": "Piper Derleme Numarası (CL)"
             }
         },
         "stream_timeouts": {
@@ -1875,7 +1888,13 @@
         "mode_cockpit": "Genel Bakış",
         "reasoning_short": "Düş",
         "cockpit_thinking_share": "Düşünme Payı",
-        "cockpit_avg_thinking_per_req": "Ort. Düşünme / istek"
+        "cockpit_avg_thinking_per_req": "Ort. Düşünme / istek",
+        "cockpit_user_rank": "Kullanıcı Sıralaması",
+        "cockpit_no_user_activity": "Kullanıcı Key tüketim etkinliği yok",
+        "cockpit_view_detail": "Ayrıntılar",
+        "cockpit_tab_accounts": "Hesaplar",
+        "cockpit_tab_models": "Modeller",
+        "cockpit_tab_users": "Kullanıcılar"
     },
     "security": {
         "title": "Güvenlik İzleme",
@@ -2010,8 +2029,25 @@
         "hint_curfew": "Devre dışı bırakmak için boş bırakın. Sunucu saatine göredir.",
         "custom_expires_required": "Please select custom expiration time",
         "expires_custom": "Custom Time",
-        "custom_expires_at": "Custom Expiration At",
-        "hint_custom_expires": "Set precise expiration timestamp for this token"
+        "custom_expires_at": "Özel Son Kullanma Tarihi",
+        "hint_custom_expires": "Bu token için kesin son kullanma zaman damgasını ayarlayın",
+        "view_stats": "Kullanım İstatistikleri",
+        "bound_ips": "İstemci IP Sayısı",
+        "recent_ips": "Aktif İstemci IP'leri ve Son Etkinlik",
+        "no_ips": "IP bağlama kaydı bulunamadı",
+        "enabled": "Etkin",
+        "disabled": "Devre Dışı",
+        "range_24h": "24 saat",
+        "range_7d": "Son 7 gün",
+        "range_30d": "Son 30 gün",
+        "range_all": "Tümü",
+        "success_rate": "Başarı Oranı",
+        "avg_per_request": "İstek Başına Ort. Token",
+        "est_throughput": "İstek başına tahmini tüketim",
+        "calls_unit": "çağrı",
+        "records_unit": "kayıt",
+        "no_trend_data": "Bu dönemde eğilim verisi yok",
+        "no_model_data": "Model verisi bulunamadı"
     },
     "apiKeyFun": {
         "title": "APIKEY.FUN Hub",

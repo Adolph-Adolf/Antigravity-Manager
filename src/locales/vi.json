@@ -1188,6 +1188,19 @@
             },
             "agent_settings": {
                 "title": "Cấu hình Agent cụ thể (Specific Agent Settings)"
+            },
+            "hub": {
+                "title": "Dấu vân tay Hub chính thức",
+                "tooltip": "Đồng bộ lưu lượng đi với chữ ký Google Antigravity Hub chính thức để tránh giới hạn 429.",
+                "source_custom": "Tùy chỉnh",
+                "source_remote": "Từ xa",
+                "source_local": "Ứng dụng cục bộ",
+                "source_baseline": "Cơ sở ổn định",
+                "detect_button": "Dò tìm",
+                "detect_success": "Đã dò tìm và đồng bộ Hub chính thức: v{{version}} (CL: {{cl}})",
+                "detect_failed": "Dò tìm thất bại: {{error}}",
+                "version_label": "Phiên bản Hub",
+                "cl_label": "Số hiệu Piper CL"
             }
         },
         "stream_timeouts": {
@@ -1891,7 +1904,13 @@
         "mode_cockpit": "Bảng tổng quan",
         "reasoning_short": "Suy",
         "cockpit_thinking_share": "Tỷ lệ suy luận",
-        "cockpit_avg_thinking_per_req": "Suy luận TB / yêu cầu"
+        "cockpit_avg_thinking_per_req": "Suy luận TB / yêu cầu",
+        "cockpit_user_rank": "Xếp hạng người dùng",
+        "cockpit_no_user_activity": "Không có hoạt động tiêu thụ Key của người dùng",
+        "cockpit_view_detail": "Chi tiết",
+        "cockpit_tab_accounts": "Tài khoản",
+        "cockpit_tab_models": "Mô hình",
+        "cockpit_tab_users": "Người dùng"
     },
     "security": {
         "title": "Giám sát An ninh",
@@ -2026,8 +2045,25 @@
         "hint_curfew": "Để trống để tắt. Dựa trên giờ máy chủ.",
         "custom_expires_required": "Please select custom expiration time",
         "expires_custom": "Custom Time",
-        "custom_expires_at": "Custom Expiration At",
-        "hint_custom_expires": "Set precise expiration timestamp for this token"
+        "custom_expires_at": "Hết hạn tùy chỉnh",
+        "hint_custom_expires": "Đặt mốc thời gian hết hạn chính xác cho mã thông báo này",
+        "view_stats": "Thống kê sử dụng",
+        "bound_ips": "Số IP máy khách",
+        "recent_ips": "IP máy khách đang hoạt động & hoạt động gần đây",
+        "no_ips": "Không tìm thấy bản ghi liên kết IP",
+        "enabled": "Kích hoạt",
+        "disabled": "Vô hiệu hóa",
+        "range_24h": "24 giờ",
+        "range_7d": "7 ngày qua",
+        "range_30d": "30 ngày qua",
+        "range_all": "Tất cả",
+        "success_rate": "Tỷ lệ thành công",
+        "avg_per_request": "Token trung bình/yêu cầu",
+        "est_throughput": "Ước tính tiêu thụ mỗi yêu cầu",
+        "calls_unit": "lượt gọi",
+        "records_unit": "bản ghi",
+        "no_trend_data": "Không có dữ liệu xu hướng trong khoảng thời gian này",
+        "no_model_data": "Không có dữ liệu mô hình"
     },
     "apiKeyFun": {
         "title": "APIKEY.FUN Hub",

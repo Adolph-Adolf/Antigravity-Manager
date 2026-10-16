@@ -446,21 +446,31 @@ pub async fn fetch_quota_with_cache(
                 if let Some(ref groups) = quota_groups {
                     for model in quota_data.models.iter_mut() {
                         let name_lower = model.name.to_lowercase();
-                        let is_claude_or_gpt =
-                            name_lower.starts_with("claude") || name_lower.starts_with("gpt");
-                        let is_gemini = name_lower.starts_with("gemini");
+                        let is_argon = name_lower.contains("argon");
+                        let is_claude_or_gpt = !is_argon
+                            && (name_lower.starts_with("claude") || name_lower.starts_with("gpt"));
+                        let is_gemini = !is_argon && name_lower.starts_with("gemini");
 
                         for group in groups {
                             let gname = group.display_name.to_lowercase();
-                            let matches_group = if is_claude_or_gpt {
-                                gname.contains("claude")
+                            let is_argon_group = gname.contains("argon");
+                            let is_claude_group = !is_argon_group
+                                && (gname.contains("claude")
                                     || gname.contains("gpt")
-                                    || gname.contains("3p")
-                            } else if is_gemini {
-                                gname.contains("gemini")
+                                    || gname.contains("3p"));
+                            let is_gemini_group = !is_argon_group
+                                && !is_claude_group
+                                && (gname.contains("gemini")
                                     || (!gname.contains("claude")
                                         && !gname.contains("gpt")
-                                        && !gname.contains("3p"))
+                                        && !gname.contains("3p")));
+
+                            let matches_group = if is_argon {
+                                is_argon_group
+                            } else if is_claude_or_gpt {
+                                is_claude_group
+                            } else if is_gemini {
+                                is_gemini_group
                             } else {
                                 false
                             };

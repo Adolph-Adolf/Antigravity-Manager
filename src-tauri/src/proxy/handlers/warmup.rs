@@ -235,7 +235,11 @@ pub async fn handle_warmup(
                         duration_ms: Some(duration),
                         status: Some(400),
                         account_email: Some(req.email.clone()),
-                        account_id: if account_id.is_empty() { None } else { Some(account_id.clone()) },
+                        account_id: if account_id.is_empty() {
+                            None
+                        } else {
+                            Some(account_id.clone())
+                        },
                         is_retired: None,
                         error: Some(e),
                         is_server_error: Some(false),
@@ -365,7 +369,11 @@ pub async fn handle_warmup(
                     upstream_model: Some(req.model.clone()),
                     account_email: Some(req.email.clone()),
                     client_ip: Some("127.0.0.1".to_string()),
-                    error: if is_retired { Some("Model Retired (已退役下线)".to_string()) } else { None },
+                    error: if is_retired {
+                        Some("Model Retired (已退役下线)".to_string())
+                    } else {
+                        None
+                    },
                     request_body: Some(format!(
                         "{{\"type\": \"warmup\", \"model\": \"{}\"}}",
                         req.model
@@ -398,9 +406,17 @@ pub async fn handle_warmup(
                         duration_ms: Some(duration),
                         status: Some(status_code),
                         account_email: Some(req.email.clone()),
-                        account_id: if account_id.is_empty() { None } else { Some(account_id.clone()) },
+                        account_id: if account_id.is_empty() {
+                            None
+                        } else {
+                            Some(account_id.clone())
+                        },
                         is_retired: if is_retired { Some(true) } else { None },
-                        error: if is_retired { Some(response_text) } else { None },
+                        error: if is_retired {
+                            Some(response_text)
+                        } else {
+                            None
+                        },
                         is_server_error: None,
                         error_type: None,
                     }),
@@ -501,7 +517,11 @@ pub async fn handle_warmup(
                         duration_ms: Some(duration),
                         status: Some(status_code),
                         account_email: Some(req.email.clone()),
-                        account_id: if account_id.is_empty() { None } else { Some(account_id.clone()) },
+                        account_id: if account_id.is_empty() {
+                            None
+                        } else {
+                            Some(account_id.clone())
+                        },
                         is_retired: None,
                         error: Some(error_text),
                         is_server_error: Some(status_code >= 500),
@@ -571,7 +591,11 @@ pub async fn handle_warmup(
                     duration_ms: Some(duration),
                     status: Some(502),
                     account_email: Some(req.email.clone()),
-                    account_id: if account_id.is_empty() { None } else { Some(account_id.clone()) },
+                    account_id: if account_id.is_empty() {
+                        None
+                    } else {
+                        Some(account_id.clone())
+                    },
                     is_retired: None,
                     error: Some(e),
                     is_server_error: Some(false),

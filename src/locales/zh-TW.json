@@ -1185,6 +1185,19 @@
             },
             "agent_settings": {
                 "title": "特定 Agent 設定 (Specific Agent Settings)"
+            },
+            "hub": {
+                "title": "官方 Hub 客戶端指紋",
+                "tooltip": "出站流量對齊 Google 官方 Antigravity Hub 原生客戶端特徵，自動維護版本號與構建 CL 編號以規避 429 配額限制。",
+                "source_custom": "自訂",
+                "source_remote": "遠端探測",
+                "source_local": "本地應用",
+                "source_baseline": "穩態基準",
+                "detect_button": "動態探測",
+                "detect_success": "已成功探測並同步官方最新 Hub: v{{version}} (CL: {{cl}})",
+                "detect_failed": "探測失敗: {{error}}",
+                "version_label": "Hub 版本號 (Version)",
+                "cl_label": "Piper 構建編號 (CL)"
             }
         },
         "stream_timeouts": {
@@ -1963,7 +1976,13 @@
         "mode_cockpit": "總覽看板",
         "reasoning_short": "思",
         "cockpit_thinking_share": "思考佔比",
-        "cockpit_avg_thinking_per_req": "均次思考"
+        "cockpit_avg_thinking_per_req": "均次思考",
+        "cockpit_user_rank": "用戶排行",
+        "cockpit_no_user_activity": "暫無用戶 Key 消耗活動",
+        "cockpit_view_detail": "詳情",
+        "cockpit_tab_accounts": "帳號",
+        "cockpit_tab_models": "模型",
+        "cockpit_tab_users": "用戶"
     },
     "security": {
         "title": "安全監控",
@@ -2099,7 +2118,24 @@
         "custom_expires_required": "請選擇自訂過期時間",
         "expires_custom": "自訂時間",
         "custom_expires_at": "自訂到期時間",
-        "hint_custom_expires": "設定 Token 的精確到期時間點"
+        "hint_custom_expires": "設定 Token 的精確到期時間點",
+        "view_stats": "用量統計",
+        "bound_ips": "客戶端 IP 數",
+        "recent_ips": "活躍客戶端 IP 與最近活動",
+        "no_ips": "暫無 IP 綁定記錄",
+        "enabled": "啟用",
+        "disabled": "禁用",
+        "range_24h": "24小時",
+        "range_7d": "近7天",
+        "range_30d": "近30天",
+        "range_all": "全部",
+        "success_rate": "成功率",
+        "avg_per_request": "平均單次 Token",
+        "est_throughput": "每請求吞吐估算",
+        "calls_unit": "次調用",
+        "records_unit": "個記錄",
+        "no_trend_data": "該時段內暫無走勢數據",
+        "no_model_data": "暫無模型數據"
     },
     "apiKeyFun": {
         "title": "APIKEY.FUN 中轉站",

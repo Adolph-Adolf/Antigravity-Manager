@@ -43,6 +43,7 @@ mod tests {
             model_quotas: std::collections::HashMap::new(),
             model_limits: std::collections::HashMap::new(),
             available_models: std::collections::HashSet::new(),
+            model_metadata: std::collections::HashMap::new(),
         }
     }
 
@@ -1113,6 +1114,7 @@ mod tests {
             model_quotas: std::collections::HashMap::new(),
             model_limits: std::collections::HashMap::new(),
             available_models: std::collections::HashSet::new(),
+            model_metadata: std::collections::HashMap::new(),
         }
     }
 

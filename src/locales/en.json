@@ -353,6 +353,7 @@
         "quota_window_weekly_short": "Weekly",
         "quota_group_gemini": "Gemini Models",
         "quota_group_claude": "Claude & GPT Models",
+        "quota_group_argon": "Gemini 4 Argon",
         "weekly_exhausted_tooltip": "Weekly quota exhausted (0%); waiting for weekly reset",
         "weekly_constrained_tooltip": "Constrained by weekly limit",
         "weekly_tokens": "Cycle tokens",
@@ -1179,6 +1180,19 @@
             },
             "agent_settings": {
                 "title": "Specific Agent Settings"
+            },
+            "hub": {
+                "title": "Official Hub Client Fingerprint",
+                "tooltip": "Aligns outbound egress with Google official Antigravity Hub signatures, dynamically maintaining version and CL numbers to avoid 429 quota exhaustion.",
+                "source_custom": "Custom",
+                "source_remote": "Remote Detected",
+                "source_local": "Local App",
+                "source_baseline": "Stable Baseline",
+                "detect_button": "Detect",
+                "detect_success": "Successfully detected and synced official Hub: v{{version}} (CL: {{cl}})",
+                "detect_failed": "Detection failed: {{error}}",
+                "version_label": "Hub Version",
+                "cl_label": "Piper Build Number (CL)"
             }
         },
         "stream_timeouts": {
@@ -1995,7 +2009,13 @@
         "cockpit_saved_badge": "Saved",
         "reasoning_short": "Thk",
         "cockpit_thinking_share": "Thinking Share",
-        "cockpit_avg_thinking_per_req": "Avg Thinking / req"
+        "cockpit_avg_thinking_per_req": "Avg Thinking / req",
+        "cockpit_user_rank": "User Rank",
+        "cockpit_no_user_activity": "No user Key consumption activity",
+        "cockpit_view_detail": "Details",
+        "cockpit_tab_accounts": "Accounts",
+        "cockpit_tab_models": "Models",
+        "cockpit_tab_users": "Users"
     },
     "errors": {
         "stream": {
@@ -2140,7 +2160,24 @@
         "custom_expires_required": "Please select custom expiration time",
         "expires_custom": "Custom Time",
         "custom_expires_at": "Custom Expiration At",
-        "hint_custom_expires": "Set precise expiration timestamp for this token"
+        "hint_custom_expires": "Set precise expiration timestamp for this token",
+        "view_stats": "Usage Statistics",
+        "bound_ips": "Client IPs",
+        "recent_ips": "Active Client IPs & Recent Activity",
+        "no_ips": "No IP binding records found",
+        "enabled": "Active",
+        "disabled": "Disabled",
+        "range_24h": "24h",
+        "range_7d": "7 Days",
+        "range_30d": "30 Days",
+        "range_all": "All",
+        "success_rate": "Success Rate",
+        "avg_per_request": "Avg Tokens/Req",
+        "est_throughput": "Est. tokens per request",
+        "calls_unit": "calls",
+        "records_unit": "records",
+        "no_trend_data": "No trend data in this period",
+        "no_model_data": "No model data available"
     },
     "apiKeyFun": {
         "title": "APIKEY.FUN Hub",

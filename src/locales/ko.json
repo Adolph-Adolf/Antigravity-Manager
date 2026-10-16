@@ -1141,6 +1141,19 @@
             "log_retention_rows": "최대 로그 행 수",
             "agent_settings": {
                 "title": "특정 Agent 설정 (Specific Agent Settings)"
+            },
+            "hub": {
+                "title": "공식 Hub 클라이언트 지문",
+                "tooltip": "Google 공식 Antigravity Hub 네이티브 클라이언트 특성에 아웃바운드 트래픽을 맞춰 429 할당량 초과를 방지합니다.",
+                "source_custom": "사용자 지정",
+                "source_remote": "원격 감지",
+                "source_local": "로컬 앱",
+                "source_baseline": "기본값",
+                "detect_button": "감지",
+                "detect_success": "공식 최신 Hub 감지 및 동기화 성공: v{{version}} (CL: {{cl}})",
+                "detect_failed": "감지 실패: {{error}}",
+                "version_label": "Hub 버전 (Version)",
+                "cl_label": "Piper 빌드 번호 (CL)"
             }
         },
         "stream_timeouts": {
@@ -1848,7 +1861,13 @@
         "mode_cockpit": "개요 대시보드",
         "reasoning_short": "추",
         "cockpit_thinking_share": "추론 비율",
-        "cockpit_avg_thinking_per_req": "평균 추론 / 회"
+        "cockpit_avg_thinking_per_req": "평균 추론 / 회",
+        "cockpit_user_rank": "사용자 순위",
+        "cockpit_no_user_activity": "사용자 Key 소비 활동 없음",
+        "cockpit_view_detail": "세부정보",
+        "cockpit_tab_accounts": "계정",
+        "cockpit_tab_models": "모델",
+        "cockpit_tab_users": "사용자"
     },
     "errors": {
         "stream": {
@@ -1993,7 +2012,24 @@
         "custom_expires_required": "사용자 지정 만료 시간을 선택하세요",
         "expires_custom": "사용자 지정 시간",
         "custom_expires_at": "사용자 지정 만료일시",
-        "hint_custom_expires": "토큰의 정확한 만료 일시 설정"
+        "hint_custom_expires": "토큰의 정확한 만료 일시 설정",
+        "view_stats": "사용량 통계",
+        "bound_ips": "클라이언트 IP 수",
+        "recent_ips": "활성 클라이언트 IP 및 최근 활동",
+        "no_ips": "IP 바인딩 기록이 없습니다",
+        "enabled": "활성",
+        "disabled": "비활성",
+        "range_24h": "24시간",
+        "range_7d": "최근 7일",
+        "range_30d": "최근 30일",
+        "range_all": "전체",
+        "success_rate": "성공률",
+        "avg_per_request": "요청당 평균 Token",
+        "est_throughput": "요청당 예상 처리량",
+        "calls_unit": "회 호출",
+        "records_unit": "개 기록",
+        "no_trend_data": "해당 기간의 추세 데이터가 없습니다",
+        "no_model_data": "모델 데이터가 없습니다"
     },
     "apiKeyFun": {
         "title": "APIKEY.FUN 허브",

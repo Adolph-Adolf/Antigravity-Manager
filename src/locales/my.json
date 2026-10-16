@@ -1132,6 +1132,19 @@
             },
             "agent_settings": {
                 "title": "Konfigurasi Agent Khusus (Specific Agent Settings)"
+            },
+            "hub": {
+                "title": "တရားဝင် Hub Client Fingerprint",
+                "tooltip": "429 ကန့်သတ်ချက်များကို ရှောင်ရှားရန် Google Antigravity Hub နှင့် ကိုက်ညီအောင် ပြုလုပ်ထားပါသည်။",
+                "source_custom": "စိတ်ကြိုက်",
+                "source_remote": "အဝေးမှ စစ်ဆေးတွေ့ရှိ",
+                "source_local": "စက်တွင်း အက်ပ်",
+                "source_baseline": "မူလစံနှုန်း",
+                "detect_button": "စစ်ဆေးရန်",
+                "detect_success": "တရားဝင် Hub ဗားရှင်းကို အောင်မြင်စွာ ရယူပြီး: v{{version}} (CL: {{cl}})",
+                "detect_failed": "စစ်ဆေးမှု မအောင်မြင်ပါ: {{error}}",
+                "version_label": "Hub ဗားရှင်း",
+                "cl_label": "Piper Build နံပါတ် (CL)"
             }
         },
         "stream_timeouts": {
@@ -1814,7 +1827,13 @@
         "mode_cockpit": "ခြုံငုံသုံးသပ်ချက် ဘုတ်",
         "reasoning_short": "စဥ်",
         "cockpit_thinking_share": "စဥ်းစားမှု အချိုး",
-        "cockpit_avg_thinking_per_req": "တောင်းဆိုမှုတစ်ခုလျှင် ပျမ်းမျှစဉ်းစားမှု"
+        "cockpit_avg_thinking_per_req": "တောင်းဆိုမှုတစ်ခုလျှင် ပျမ်းမျှစဉ်းစားမှု",
+        "cockpit_user_rank": "အသုံးပြုသူ အဆင့်သတ်မှတ်ချက်",
+        "cockpit_no_user_activity": "အသုံးပြုသူ Key အသုံးပြုမှု လုပ်ဆောင်ချက် မရှိပါ",
+        "cockpit_view_detail": "အသေးစိတ်",
+        "cockpit_tab_accounts": "အကောင့်များ",
+        "cockpit_tab_models": "မော်ဒယ်များ",
+        "cockpit_tab_users": "အသုံးပြုသူများ"
     },
     "errors": {
         "stream": {
@@ -1860,8 +1879,25 @@
         "hint_curfew": "Biarkan kosong untuk nyahaktifkan. Berdasarkan masa pelayan.",
         "custom_expires_required": "Please select custom expiration time",
         "expires_custom": "Custom Time",
-        "custom_expires_at": "Custom Expiration At",
-        "hint_custom_expires": "Set precise expiration timestamp for this token"
+        "custom_expires_at": "Tamat Tempoh Tersuai",
+        "hint_custom_expires": "Tetapkan cap masa tamat tempoh tepat untuk token ini",
+        "view_stats": "Statistik Penggunaan",
+        "bound_ips": "IP Klien",
+        "recent_ips": "IP Klien Aktif & Aktiviti Terkini",
+        "no_ips": "Tiada rekod ikatan IP ditemui",
+        "enabled": "Aktif",
+        "disabled": "Dinyahaktifkan",
+        "range_24h": "24 jam",
+        "range_7d": "7 Hari lepas",
+        "range_30d": "30 Hari lepas",
+        "range_all": "Semua",
+        "success_rate": "Kadar Kejayaan",
+        "avg_per_request": "Purata Token/Permintaan",
+        "est_throughput": "Anggaran penggunaan setiap permintaan",
+        "calls_unit": "panggilan",
+        "records_unit": "rekod",
+        "no_trend_data": "Tiada data trend dalam tempoh ini",
+        "no_model_data": "Tiada data model tersedia"
     },
     "apiKeyFun": {
         "title": "APIKEY.FUN Hub",

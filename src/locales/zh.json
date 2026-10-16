@@ -351,6 +351,7 @@
         "quota_window_weekly_short": "周配额",
         "quota_group_gemini": "Gemini 模型",
         "quota_group_claude": "Claude & GPT 模型",
+        "quota_group_argon": "Gemini 4 Argon",
         "weekly_exhausted_tooltip": "周配额已耗尽 (0%)，等待周重置",
         "weekly_constrained_tooltip": "受到周配额短板压制",
         "weekly_tokens": "本周期 Token",
@@ -1170,6 +1171,19 @@
             },
             "agent_settings": {
                 "title": "特定 Agent 配置 (Specific Agent Settings)"
+            },
+            "hub": {
+                "title": "官方 Hub 客户端指纹",
+                "tooltip": "出站流量对齐 Google 官方 Antigravity Hub 原生客户端特征，自动维护版本号与构建 CL 编号以规避 429 配额限制。",
+                "source_custom": "自定义",
+                "source_remote": "远端探测",
+                "source_local": "本地应用",
+                "source_baseline": "稳态基准",
+                "detect_button": "动态探测",
+                "detect_success": "已成功探测并同步官方最新 Hub: v{{version}} (CL: {{cl}})",
+                "detect_failed": "探测失败: {{error}}",
+                "version_label": "Hub 版本号 (Version)",
+                "cl_label": "Piper 构建编号 (CL)"
             }
         },
         "stream_timeouts": {
@@ -1961,7 +1975,13 @@
         "cockpit_saved_badge": "节省",
         "reasoning_short": "思",
         "cockpit_thinking_share": "思考占比",
-        "cockpit_avg_thinking_per_req": "均次思考"
+        "cockpit_avg_thinking_per_req": "均次思考",
+        "cockpit_user_rank": "用户排行",
+        "cockpit_no_user_activity": "暂无用户 Key 消耗活动",
+        "cockpit_view_detail": "详情",
+        "cockpit_tab_accounts": "账号",
+        "cockpit_tab_models": "模型",
+        "cockpit_tab_users": "用户"
     },
     "errors": {
         "stream": {
@@ -2106,7 +2126,24 @@
         "custom_expires_required": "请选择自定义过期时间",
         "expires_custom": "自定义时间",
         "custom_expires_at": "自定义到期时间",
-        "hint_custom_expires": "设置 Token 的精确到期时间点"
+        "hint_custom_expires": "设置 Token 的精确到期时间点",
+        "view_stats": "用量统计",
+        "bound_ips": "客户端 IP 数",
+        "recent_ips": "活跃客户端 IP 与最近活动",
+        "no_ips": "暂无 IP 绑定记录",
+        "enabled": "启用",
+        "disabled": "禁用",
+        "range_24h": "24小时",
+        "range_7d": "近7天",
+        "range_30d": "近30天",
+        "range_all": "全部",
+        "success_rate": "成功率",
+        "avg_per_request": "平均单次 Token",
+        "est_throughput": "每请求吞吐估算",
+        "calls_unit": "次调用",
+        "records_unit": "个记录",
+        "no_trend_data": "该时段内暂无走势数据",
+        "no_model_data": "暂无模型数据"
     },
     "apiKeyFun": {
         "title": "APIKEY.FUN 中转站",

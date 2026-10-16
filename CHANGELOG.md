@@ -4,19 +4,42 @@
 
 *   **版本演进**:
     *   **v4.9.8-beta.6 (2026-10-16)**:
-        -   **[上游端点 12s 防假死看门狗、全池 429 极速失败与账号状态自愈] (PR #3680, Fixes #3506, Ref #3525, Ref #3634, Ref #3666, Thanks to @cubelikeplayDaniel)**:
-            -   **候选端点 12 秒流式握手看门狗硬超时**: 在流式握手（`req_builder.send()`）且仍有备用候选端点时，引入 12 秒防假死看门狗超时（`tokio::time::timeout`）。当上游故障端点（如 Prod 大流式长连接 56 秒假死断连）无响应时快速熔断切换至下一端点，彻底杜绝客户端静默挂死 56 秒；将 `EndpointHealthTracker` 故障冷却期延长至 300 秒（5 分钟），防止故障端点频繁过早复活重新污染优先级。 (PR #3680, Thanks to @cubelikeplayDaniel)
-            -   **Sandbox 400 智能识别与降级切换**: 针对 Sandbox 集群在非美区 IP 返回 400 Bad Request (`FAILED_PRECONDITION`) 的特定限制，在 `should_try_next_endpoint_for_url` 中智能识别并降级切换至备用端点，避免直接向客户端抛错；收紧 L4 TCP Keep-Alive 周期至 30 秒以防中间网关空闲掐断。 (PR #3680, Thanks to @cubelikeplayDaniel)
-            -   **429 请求级重试收紧与全池瞬态饱和快速失败 (Fail-Fast)**: 多账号号池在首轮遇到 429 时以 50ms 闪电快速切号寻找可用账号；当全池健康账号均遇 429 且无明确重置时间（`Retry-After`）时，判定为瞬态饱和，立即快速失败退出（约 1.5 秒），消除累加 26 秒以上的二轮无效退避等待。 (PR #3680, Thanks to @cubelikeplayDaniel)
-            -   **账号实体文件权威性确立与状态自愈**: 彻底根除 `accounts.json` 索引中的 `proxy_disabled` 停用标记与实体文件真实状态漂移导致健康账号被误杀并引发号池饥饿的隐患；在 `list_accounts`、`load_accounts` 与 `reload_account` 中确立实体文件为唯一权威来源并自动自愈写回索引，在 `update_account_quota` 中原子更新索引摘要。 (PR #3680, Thanks to @cubelikeplayDaniel)
+        -   **[Gemini 4 Argon 独立配额展示、按需渲染与后端熔断防穿透隔离]**:
+            -   **前端按需全宽独立配额条**: 针对 Google 旗舰推理模型 Gemini 4 Argon 独立的配额计算机制，在账号卡片、表格视图、当前主账号及配额详情窗口中，新增专属于 Argon 的全宽配额条；采用数据驱动（Data-driven）按需渲染，仅对真实具备 Argon 配额或授权的账号渲染展示，移除了挤占空间的告警图标，确保第三方模型图标与 Argon 图标整洁互不遮挡。
+            -   **后端配额聚合与数据流隔离**: 在 `quota.rs` 中将 `is_argon` 与普通 `gemini` 和 `claude_or_gpt` 实施严格的三路互斥隔离，防止 Argon 独立桶数据覆盖或污染普通 Gemini 的 5H 滚动桶或周配额，反之亦然。
+            -   **档位变体归一化防穿透与精准熔断**: 在 `model_mapping.rs` 的 `normalize_to_standard_id` 中将 `gemini-4-argon-*` 全系列档位变体（high/medium/low/thinking）统一归一化为基底 ID `"gemini-4-argon"`，并在上游 429 或配额耗尽时精准锁定该模型至周重置时间；杜绝因变体未对齐导致的熔断穿透击穿，且严禁触发账号级锁定，确保账号旗下的普通 Gemini 3 与 Claude 模型不受波及、健康可调度。
+        -   **[/v1/models 全面透出动态模型能力元数据与派生裸模型元数据继承] (Fixes #3677)**:
+            -   **透出模型能力元数据 (ModelListingMeta)**: 解决下游聚合网关（如 One API、New API）与第三方客户端无法感知模型能力的问题。在 `/v1/models`、`/v1/models/:model`（OpenAI / Responses / Claude 端点）中，直接从账号动态 Quota 缓存中透出完整的上游标称能力字段，包括 `display_name`、`supports_images`、`supports_thinking`、`thinking_budget`、`recommended`、`max_tokens`、`max_output_tokens` 及 `supported_mime_types`。 (Fixes #3677)
+            -   **派生裸模型自动继承能力元数据**: 当上游账号仅下发分档变体（如 `gemini-3.7-flash-high`）时，网关在自动派生去后缀裸模型（`gemini-3.7-flash`）的同时，自动继承对应档位的能力元数据并智能清洗展示名括号后缀，彻底杜绝常用裸模型丢失识图与思考能力的问题。 (Fixes #3677)
+            -   **全链路内存缓存与纯可选向后兼容**: 账号模型元数据在加载和刷新时直接常驻内存，请求时零重复磁盘 I/O；所有扩展字段全可选且空值自动跳过，对旧版账号文件 100% 健壮兼容。 (Fixes #3677)
         -   **[支持模型快速测活、号池自调度与真实流量端点瀑布流联动] (Ref #3678)**:
             -   **应用内开箱即用模型连通性测活**: 在「支持模型与集成」表格中引入即时测活功能，用户无需配置外部客户端或发送第三方 curl 测试，即可直接一键快速验证模型连通性与可用性；支持「⚡️ 批量测活」与随时中断。 (Ref #3678)
             -   **智能号池自调度与指定账号双模式**: 默认采用「🤖 自动调度 (反代号池)」，自动过滤禁用与停用账号并优先选取健康且配额充足的账号；同时支持在顶部下拉框中指定特定账号进行针对性连通性诊断。 (Ref #3678)
             -   **打通真实流量日志与端点瀑布流明细**: 每次测活均作为标准预热协议（`warmup`）记录至 SQLite 流量日志；点击状态结果胶囊（如正常 `🟢 280ms`、`🟡 429 限流`、`🔴 已退役`）可直接无缝呼出请求详情弹窗，完整查看上游端点切换瀑布流（Prod / Daily / Sandbox 尝试耗时）、流式分段诊断、请求响应头与完整报文。 (Ref #3678)
             -   **无入侵 IPC 架构与多语言全量覆盖**: 纯原生 Tauri IPC 命令驱动，彻底杜绝破坏 CSP 或 CORS 的前端直连缺陷；重塑精简高质感表格排版，并同步覆盖全量 12 种多国语言。 (Ref #3678)
-        -   **[Claude Code 2.1.300+ 深度兼容与 1M 上下文别名适配] (PR #3680, Thanks to @cubelikeplayDaniel)**:
-            -   **方括号上下文后缀自动剥离**: 在 `canonicalize_claude_client_model_id` 中支持自动剥离 `[1m]`、`[200k]` 等方括号上下文后缀（如 `claude-3-7-sonnet-20250219[1m]`），无缝对接下游内置与自定义模型映射规则。 (PR #3680, Thanks to @cubelikeplayDaniel)
-            -   **透传思考 effort 参数与合并 Beta 特征头**: 提取并透传客户端顶层 `effort` 参数至 pipeline 思考逻辑；完整合并透传客户端全量 `anthropic-beta` 请求头，深度适配新版 Claude Code。 (PR #3680, Thanks to @cubelikeplayDaniel)
+        -   **[上游端点 12s 看门狗超时、账号状态同步修复与 Claude Code 适配] (PR #3680, Fixes #3506, Ref #3525, Ref #3634, Ref #3666, Thanks to @cubelikeplayDaniel)**:
+            -   **候选端点 12 秒流式握手看门狗超时**: 当存在备用候选端点时，为上游建联握手引入 12 秒看门狗超时（`tokio::time::timeout`）。当上游故障端点无响应时快速熔断切换至下一端点，避免长连接静默挂起 56 秒；同时将 `EndpointHealthTracker` 故障冷却观察期延长至 300 秒（5 分钟），防止故障节点过早复活重复踩坑。 (PR #3680, Thanks to @cubelikeplayDaniel)
+            -   **修复账号索引与实体文件状态不一致问题**: 确立账号实体文件为启停状态的权威来源，解决 `accounts.json` 索引与实体文件状态漂移导致健康账号被误判停用的隐患，并在列表刷新与重新加载时自动修复索引。 (PR #3680, Thanks to @cubelikeplayDaniel)
+            -   **Claude Code 2.1.300+ 深度兼容与 1M 上下文别名适配**: 在 `canonicalize_claude_client_model_id` 中支持自动剥离 `[1m]`、`[200k]` 等方括号上下文后缀（如 `claude-3-7-sonnet-20250219[1m]`），无缝对接下游内置与自定义模型映射规则；提取并透传客户端顶层 `effort` 参数至 pipeline 思考逻辑，并完整合并透传客户端全量 `anthropic-beta` 请求头。 (PR #3680, Thanks to @cubelikeplayDaniel)
+        -   **[深度嵌套工具 Schema 递归上限解耦提升与裸数组兜底修复] (Fixes #3682)**:
+            -   **递归深度上限提升与解耦 (MAX_RECURSION_DEPTH = 64)**: 解决思维导图等深度嵌套工具 Schema 在深度超过 10 时因 `clean_json_schema_recursive` 提前返回跳过兜底清洗，导致裸数组（无 `items`）原样透传上游引发 `400 INVALID_ARGUMENT: missing field.` 的缺陷；将递归深度上限由 10 提升至 64，轻松支持 30+ 层树形结构。 (Fixes #3682)
+            -   **消除无 $ref 结构误报 Schema-Flatten 告警**: 解耦 `$ref` 展开上限与清洗逻辑，仅当节点包含未展开 `$ref` 且超限时才触发降级与告警，彻底根除纯树形嵌套结构在日志中频繁误刷 `WARN [Schema-Flatten] Max recursion depth reached` 的问题。 (Fixes #3682)
+            -   **引入基于显式堆栈的 Fail-safe 合规兜底**: 新增迭代式 `apply_minimal_failsafe`，在达到极限深度退出递归时对子树执行非递归保底修复，确保所有 `type: "array"` 节点均自动补齐 `items: {"type": "string"}`、规范化对象 `type` 与属性，杜绝调用栈溢出风险并彻底杜绝非法 Protobuf 载荷上送。 (Fixes #3682)
+        -   **[官方 Hub 指纹对齐、远程更新源动态探测与版本号自定义覆盖] (Ref #3665)**:
+            -   **升级对齐官方最新 Hub 指纹**: 将官方上游请求头 User-Agent 从过期的 2.17.0 升级对齐至最新官方 Hub 版本 `2.23.1` 及 Piper Monorepo 构建提交编号 `cl=998881661`（`antigravity/hub/2.23.1 (aidev_client; os_type=darwin; arch=arm64; cl=998881661)`），彻底根除因客户端版本过旧或错误注入自身应用版本号（`4.9.8-beta.x`）被上游识别拦截的隐患。 (Ref #3665)
+            -   **四级自适应解析机制 (自定义 > 远程更新源 > 本地安装 > 内置基线)**: 新增 `hub_version` 动态探测模块，支持无需重启直连官方 Cloud Run 自动更新 Manifest 实时获取最新版本号；自动探测本机安装的官方 Antigravity 桌面端应用版本；当上游无网络或未安装时平滑降级至内置基线。 (Ref #3665)
+            -   **UI 直观展示与用户自主覆写支持**: 在「设置 - 高级」中新增「官方 Hub 请求头指纹」卡片，实时展示当前生效的完整 User-Agent 与解析来源（自定义 / 远程更新源 / 本地安装 / 内置基线），支持「🔄 动态探测」一键刷新与复制，并提供版本号与 CL 构建号自定义输入框与配置持久化，彻底赋予用户主动掌控权。 (Ref #3665)
+        -   **[工具调用与回执名称双向自愈与非法 unknown 降级防护] (Fixes #3679)**:
+            -   **Pipeline 级工具名称拓扑自愈**: 彻底解决客户端因滑动窗口截断、格式漂移或 Adapter 解析缺失导致转出报文中出现未声明工具名 `'unknown'`，引发上游 Gemini 400 校验异常中断任务的缺陷。在入站流水线中建立全会话 `id -> name` 双向拓扑索引，自动基于规范化 ID 纠正回执中缺失或为 `'unknown'` 的函数名，并在紧邻调用中自动继承。 (Fixes #3679)
+            -   **孤儿非法回执平滑降级与上游 400 熔断**: 针对上下文彻底断裂、无法关联合法工具调用的孤儿回执，安全平滑降级为普通文本 Part，在完好保留工具执行结果供模型阅读的同时，彻底杜绝非法 `functionResponse` 上送上游触发 400 报错。 (Fixes #3679)
+            -   **OpenAI 与 Responses 适配层工具名称反查增强**: 在 Chat Completions 适配器中支持跳过中间思考/纯文本消息多轮前溯匹配工具调用，兼容规范化 ID 差异，并在单一声明工具场景下智能推断；在 Responses API 中增强对 `function.name` 等嵌套层级字段的健壮提取。 (Fixes #3679)
+        -   **[用户 Token 专属用量分析大屏与赛博大盘用户排行榜] (Fixes #3676)**:
+            -   **单 Token 独立可视化分析大屏 (UserTokenStatsModal)**: 解决全局 Token 统计聚焦于上游 Google 账号与模型、无法按特定用户 API Key 进行下钻分析的痛点。在「用户 Token」表格中点击用量胶囊或操作栏的「📊 统计」按钮，即可直观呼出宽幅用量分析弹窗。 (Fixes #3676)
+            -   **时间走势面积图与核心 KPI 指标卡**: 支持自由切换「24小时 (小时粒度)」、「近7天 (日粒度)」、「近30天」及「全部」四档时间跨度，实时渲染输入 Token 与输出 Token 的时序面积走势图；联动汇总总 Token 消耗、总请求数、请求成功率、平均每请求吞吐及活跃客户端 IP 数量。 (Fixes #3676)
+            -   **模型消耗占比与活跃客户端 IP 溯源**: 自动按模型分类统计该 Key 的 Tokens 消耗绝对值、占比百分比及调用次数；同时联动 IP 绑定表列出最近活跃客户端 IP、调用频次、最近活动时间戳与 User-Agent 标头。 (Fixes #3676)
+            -   **赛博大盘用户排行榜 (Cyber Cockpit View) 与无缝下钻**: 在全局「Token 消费统计 - 赛博大盘」右侧监控池新增「用户排行」第三视图 Tab，与「账号排查」、「模型排行」平级自由切换。直观呈现活跃用户 Key 消耗排行、相对进度条、总额与占比，并支持直接点击任一条目无缝弹出该用户 Token 的专属用量分析大屏。 (Fixes #3676)
+            -   **后端秒级聚合与 Headless/API 契约对齐**: 依托 `token_usage_logs` 现有索引结构，新增高效的 `get_user_token_stats` 和 `get_user_tokens_ranking` Tauri 命令及 `/api/user-tokens/:id/stats`、`/api/user-tokens/ranking` Admin Web API，完全保持 Headless / CLI / GUI 功能对等。 (Fixes #3676)
+            -   **全链路布局防折叠优化与 12 国语言覆盖**: 修复超长用户名截断（`truncate`）、状态徽章与时间药丸文字挤压折行问题；全量补齐简体中文、繁体中文、英语、日语、韩语、西班牙语、俄语、阿拉伯语、越南语、土耳其语、葡萄牙语及马来语等全部 12 种语言翻译。 (Fixes #3676)
 
     *   **v4.9.8-beta.5 (2026-10-15)**:
         -   **[配额与模型发现 UA 切换为 Hub 官方标识与动态版本号注入] (Ref #3665, Thanks to @wd2es7)**:

@@ -99,6 +99,7 @@ function Dashboard() {
             if (a.quota?.quota_groups) {
                 for (const group of a.quota.quota_groups) {
                     const gname = group.display_name.toLowerCase();
+                    if (gname.includes('argon')) continue;
                     const matches = isClaude
                         ? (gname.includes('claude') || gname.includes('gpt') || gname.includes('3p'))
                         : (gname.includes('gemini') || (!gname.includes('claude') && !gname.includes('gpt') && !gname.includes('3p')));
@@ -126,6 +127,7 @@ function Dashboard() {
             if (a.quota?.quota_groups) {
                 for (const group of a.quota.quota_groups) {
                     const gname = group.display_name.toLowerCase();
+                    if (gname.includes('argon')) continue;
                     const matches = isClaude
                         ? (gname.includes('claude') || gname.includes('gpt') || gname.includes('3p'))
                         : (gname.includes('gemini') || (!gname.includes('claude') && !gname.includes('gpt') && !gname.includes('3p')));
