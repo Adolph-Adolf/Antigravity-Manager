@@ -438,6 +438,10 @@ pub async fn save_config(
     let _ = app.emit("config://updated", ());
 
     // 同步全局内存配置（无论反代服务当前是否处于运行状态）
+    crate::modules::hub_version::update_hub_fingerprint(
+        config.proxy.hub_version.as_deref(),
+        config.proxy.hub_cl.as_deref(),
+    );
     crate::proxy::update_thinking_budget_config(config.proxy.thinking_budget.clone());
     crate::proxy::update_global_system_prompt_config(config.proxy.global_system_prompt.clone());
     crate::proxy::update_image_thinking_mode(config.proxy.image_thinking_mode.clone());

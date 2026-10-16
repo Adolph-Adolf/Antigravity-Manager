@@ -10,5 +10,5 @@ pub use account::{
 };
 pub use config::{AppConfig, CircuitBreakerConfig, QuotaProtectionConfig};
 pub use official_model::{OfficialModelCatalog, OfficialModelInfo};
-pub use quota::QuotaData;
+pub use quota::{ModelListingMeta, QuotaData};
 pub use token::TokenData;

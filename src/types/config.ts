@@ -23,6 +23,8 @@ export interface ProxyConfig {
     experimental?: ExperimentalConfig;
     user_agent_override?: string;
     saved_user_agent?: string;
+    hub_version?: string;
+    hub_cl?: string;
     thinking_budget?: ThinkingBudgetConfig;
     global_system_prompt?: GlobalSystemPromptConfig;
     image_thinking_mode?: 'enabled' | 'disabled'; // [NEW] 图像思维模式开关
@@ -255,3 +257,11 @@ export interface ProxyPoolConfig {
     strategy: ProxySelectionStrategy;
     account_bindings?: Record<string, string>;
 }
+
+export interface HubFingerprint {
+    version: string;
+    cl: string;
+    user_agent: string;
+    source: 'custom' | 'remote' | 'local' | 'baseline';
+}
+
