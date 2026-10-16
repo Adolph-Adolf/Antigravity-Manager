@@ -1,6 +1,8 @@
 use serde_json::{json, Value};
 
-const MAX_RECURSION_DEPTH: usize = 10;
+const MAX_RECURSION_DEPTH: usize = 64;
+pub const MAX_CLEAN_RECURSION_DEPTH: usize = 64;
+pub const MAX_REF_RECURSION_DEPTH: usize = 64;
 pub const MAX_DESCRIPTION_LENGTH: usize = 8192;
 
 /// 规范化工具或参数的描述文本：
@@ -99,8 +101,25 @@ fn flatten_refs(
     defs: &serde_json::Map<String, Value>,
     depth: usize,
 ) {
-    if depth > MAX_RECURSION_DEPTH {
-        tracing::warn!("[Schema-Flatten] Max recursion depth reached, stopping ref expansion.");
+    if depth > MAX_REF_RECURSION_DEPTH {
+        if map.contains_key("$ref") {
+            tracing::warn!("[Schema-Flatten] Max recursion depth reached with unexpanded $ref, stopping ref expansion.");
+            if let Some(Value::String(ref_path)) = map.remove("$ref") {
+                map.insert("type".to_string(), serde_json::json!("string"));
+                let hint = format!("(Unresolved $ref: {})", ref_path);
+                let desc_val = map
+                    .entry("description".to_string())
+                    .or_insert_with(|| Value::String(String::new()));
+                if let Value::String(s) = desc_val {
+                    if !s.contains(&hint) {
+                        if !s.is_empty() {
+                            s.push(' ');
+                        }
+                        s.push_str(&hint);
+                    }
+                }
+            }
+        }
         return;
     }
 
@@ -155,12 +174,83 @@ fn flatten_refs(
     }
 }
 
+/// [FIX #3682] 递归深度达到上限时的防御性合规兜底（Fail-safe Fallback）。
+///
+/// 使用基于堆的显式迭代遍历，杜绝调用栈溢出风险。
+/// 确保即便是超过最大递归深度的深层节点，也不会将违背 Gemini Schema Protobuf 约束的非法结构透传上游：
+/// 1. 所有 type == "array" 的节点若缺失 items，强制注入 items: {"type": "string"}；
+/// 2. 包含 properties 的节点若缺失 type，补全 type: "object"；
+/// 3. 若 properties 不是 Object，归一化为 {}；
+/// 4. 若 type == "object" 或包含 properties 却包含 items，移除 items 避免 Gemini 400；
+/// 5. 剔除非 Object 的 items，防止 bare boolean 等非法项上送。
+fn apply_minimal_failsafe(root: &mut Value) {
+    let mut stack = vec![root];
+    while let Some(current) = stack.pop() {
+        match current {
+            Value::Object(map) => {
+                let is_array = map
+                    .get("type")
+                    .and_then(Value::as_str)
+                    .map(|t| t.eq_ignore_ascii_case("array"))
+                    .unwrap_or(false);
+                let is_object = map
+                    .get("type")
+                    .and_then(Value::as_str)
+                    .map(|t| t.eq_ignore_ascii_case("object"))
+                    .unwrap_or(false)
+                    || map.contains_key("properties");
+
+                if is_array {
+                    if let Some(items) = map.get("items") {
+                        if !items.is_object() {
+                            map.remove("items");
+                        }
+                    }
+                    if !map.contains_key("items") {
+                        map.insert("items".to_string(), json!({ "type": "string" }));
+                    }
+                }
+
+                if is_object {
+                    if !map.contains_key("type") {
+                        map.insert("type".to_string(), Value::String("object".to_string()));
+                    }
+                    map.remove("items");
+
+                    if let Some(props) = map.get_mut("properties") {
+                        if !props.is_object() {
+                            *props = json!({});
+                        }
+                    }
+                }
+
+                // 压入子节点继续迭代合规兜底
+                for v in map.values_mut() {
+                    if v.is_object() || v.is_array() {
+                        stack.push(v);
+                    }
+                }
+            }
+            Value::Array(arr) => {
+                for item in arr.iter_mut() {
+                    if item.is_object() || item.is_array() {
+                        stack.push(item);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
 fn clean_json_schema_recursive(value: &mut Value, is_schema_node: bool, depth: usize) -> bool {
-    if depth > MAX_RECURSION_DEPTH {
-        debug_assert!(
-            false,
-            "Max recursion depth reached in clean_json_schema_recursive"
+    if depth > MAX_CLEAN_RECURSION_DEPTH {
+        tracing::warn!(
+            depth,
+            max = MAX_CLEAN_RECURSION_DEPTH,
+            "[Schema-Clean] Max recursion depth reached in clean_json_schema_recursive, applying minimal failsafe"
         );
+        apply_minimal_failsafe(value);
         return false;
     }
     let mut is_effectively_nullable = false;
@@ -1847,5 +1937,85 @@ mod tests {
 
         assert_eq!(schema["properties"]["active"]["type"], "string");
         assert_eq!(schema["properties"]["active"]["enum"], json!(["true"]));
+    }
+
+    #[test]
+    fn test_issue_3682_deeply_nested_schema_bare_array_fallback() {
+        // [FIX #3682] 验证深度嵌套树结构中，位于深度 > 10 的裸数组 (无 items) 能被正确兜底注入 items
+        fn build_mindmap_node(level: usize) -> Value {
+            if level == 1 {
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "children": { "type": "array" } // 裸数组，无 items
+                    }
+                })
+            } else {
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "children": {
+                            "type": "array",
+                            "items": build_mindmap_node(level - 1)
+                        }
+                    }
+                })
+            }
+        }
+
+        let mut schema = json!({
+            "type": "object",
+            "properties": {
+                "root": build_mindmap_node(7)
+            }
+        });
+
+        clean_json_schema(&mut schema);
+
+        // 沿树遍历到最深层的 children 节点
+        let mut curr = &schema["properties"]["root"];
+        for _ in 1..7 {
+            assert_eq!(curr["type"], "object");
+            assert_eq!(curr["properties"]["children"]["type"], "array");
+            curr = &curr["properties"]["children"]["items"];
+        }
+
+        // 最底层的 children 必须被补齐 items: { type: "string" }
+        assert_eq!(curr["type"], "object");
+        assert_eq!(curr["properties"]["children"]["type"], "array");
+        assert_eq!(
+            curr["properties"]["children"]["items"],
+            json!({ "type": "string" })
+        );
+    }
+
+    #[test]
+    fn test_issue_3682_failsafe_fallback_beyond_max_recursion_depth() {
+        // 构造超过 MAX_CLEAN_RECURSION_DEPTH (64) 的极端深层结构 (70 层)
+        fn build_deep_chain(depth: usize) -> Value {
+            if depth == 1 {
+                json!({
+                    "type": "array" // 裸数组
+                })
+            } else {
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "next": build_deep_chain(depth - 1)
+                    }
+                })
+            }
+        }
+
+        let mut schema = build_deep_chain(70);
+        clean_json_schema(&mut schema);
+
+        // 验证即便超过 64 层递归，迭代式的 apply_minimal_failsafe 也保障了最深层的裸 array 拥有 items 且无栈溢出
+        let mut curr = &schema;
+        for _ in 1..70 {
+            curr = &curr["properties"]["next"];
+        }
+        assert_eq!(curr["type"], "array");
+        assert_eq!(curr["items"], json!({ "type": "string" }));
     }
 }
