@@ -1375,7 +1375,19 @@
             "model_name": "Nombre del Modelo",
             "model_id": "ID del Modelo",
             "description": "Descripción",
-            "action": "Acción"
+            "status": "Estado / Conectividad",
+            "action": "Acción",
+            "test_connectivity": "Probar",
+            "batch_test": "Probar todo",
+            "stop_test": "Detener",
+            "auto_dispatch": "🤖 Asignación automática (Pool)",
+            "select_account": "Seleccionar cuenta",
+            "view_detail": "Ver detalles de solicitud y tiempos",
+            "retired": "Retirado",
+            "untested": "Sin probar",
+            "testing": "Probando...",
+            "success": "Correcto",
+            "rate_limited": "Límite excedido"
         },
         "cli_sync": {
             "title": "Configuración Rápida de Herramientas de Agent",

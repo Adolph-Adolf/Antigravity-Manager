@@ -9,6 +9,11 @@
             -   **Sandbox 400 智能识别与降级切换**: 针对 Sandbox 集群在非美区 IP 返回 400 Bad Request (`FAILED_PRECONDITION`) 的特定限制，在 `should_try_next_endpoint_for_url` 中智能识别并降级切换至备用端点，避免直接向客户端抛错；收紧 L4 TCP Keep-Alive 周期至 30 秒以防中间网关空闲掐断。 (PR #3680, Thanks to @cubelikeplayDaniel)
             -   **429 请求级重试收紧与全池瞬态饱和快速失败 (Fail-Fast)**: 多账号号池在首轮遇到 429 时以 50ms 闪电快速切号寻找可用账号；当全池健康账号均遇 429 且无明确重置时间（`Retry-After`）时，判定为瞬态饱和，立即快速失败退出（约 1.5 秒），消除累加 26 秒以上的二轮无效退避等待。 (PR #3680, Thanks to @cubelikeplayDaniel)
             -   **账号实体文件权威性确立与状态自愈**: 彻底根除 `accounts.json` 索引中的 `proxy_disabled` 停用标记与实体文件真实状态漂移导致健康账号被误杀并引发号池饥饿的隐患；在 `list_accounts`、`load_accounts` 与 `reload_account` 中确立实体文件为唯一权威来源并自动自愈写回索引，在 `update_account_quota` 中原子更新索引摘要。 (PR #3680, Thanks to @cubelikeplayDaniel)
+        -   **[支持模型快速测活、号池自调度与真实流量端点瀑布流联动] (Ref #3678)**:
+            -   **应用内开箱即用模型连通性测活**: 在「支持模型与集成」表格中引入即时测活功能，用户无需配置外部客户端或发送第三方 curl 测试，即可直接一键快速验证模型连通性与可用性；支持「⚡️ 批量测活」与随时中断。 (Ref #3678)
+            -   **智能号池自调度与指定账号双模式**: 默认采用「🤖 自动调度 (反代号池)」，自动过滤禁用与停用账号并优先选取健康且配额充足的账号；同时支持在顶部下拉框中指定特定账号进行针对性连通性诊断。 (Ref #3678)
+            -   **打通真实流量日志与端点瀑布流明细**: 每次测活均作为标准预热协议（`warmup`）记录至 SQLite 流量日志；点击状态结果胶囊（如正常 `🟢 280ms`、`🟡 429 限流`、`🔴 已退役`）可直接无缝呼出请求详情弹窗，完整查看上游端点切换瀑布流（Prod / Daily / Sandbox 尝试耗时）、流式分段诊断、请求响应头与完整报文。 (Ref #3678)
+            -   **无入侵 IPC 架构与多语言全量覆盖**: 纯原生 Tauri IPC 命令驱动，彻底杜绝破坏 CSP 或 CORS 的前端直连缺陷；重塑精简高质感表格排版，并同步覆盖全量 12 种多国语言。 (Ref #3678)
         -   **[Claude Code 2.1.300+ 深度兼容与 1M 上下文别名适配] (PR #3680, Thanks to @cubelikeplayDaniel)**:
             -   **方括号上下文后缀自动剥离**: 在 `canonicalize_claude_client_model_id` 中支持自动剥离 `[1m]`、`[200k]` 等方括号上下文后缀（如 `claude-3-7-sonnet-20250219[1m]`），无缝对接下游内置与自定义模型映射规则。 (PR #3680, Thanks to @cubelikeplayDaniel)
             -   **透传思考 effort 参数与合并 Beta 特征头**: 提取并透传客户端顶层 `effort` 参数至 pipeline 思考逻辑；完整合并透传客户端全量 `anthropic-beta` 请求头，深度适配新版 Claude Code。 (PR #3680, Thanks to @cubelikeplayDaniel)

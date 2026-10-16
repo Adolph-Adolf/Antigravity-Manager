@@ -1415,7 +1415,19 @@
             "model_name": "Model Name",
             "model_id": "Model ID",
             "description": "Description",
-            "action": "Action"
+            "status": "Status / Probe",
+            "action": "Action",
+            "test_connectivity": "Probe",
+            "batch_test": "Probe All",
+            "stop_test": "Stop",
+            "auto_dispatch": "🤖 Auto Dispatch (Pool)",
+            "select_account": "Select Account",
+            "view_detail": "View Request & Timing Details",
+            "retired": "Retired",
+            "untested": "Untested",
+            "testing": "Testing...",
+            "success": "OK",
+            "rate_limited": "429 Limited"
         },
         "cli_sync": {
             "title": "One-Click Agent Tools Configuration",

@@ -1375,7 +1375,19 @@
             "model_name": "モデル名",
             "model_id": "モデルID",
             "description": "説明",
-            "action": "操作"
+            "status": "ステータス / 接続性",
+            "action": "操作",
+            "test_connectivity": "疎通テスト",
+            "batch_test": "一括テスト",
+            "stop_test": "停止",
+            "auto_dispatch": "🤖 自動ルーティング (プロキシプール)",
+            "select_account": "テストアカウント指定",
+            "view_detail": "リクエスト詳細と所要時間を表示",
+            "retired": "廃止済み",
+            "untested": "未テスト",
+            "testing": "テスト中...",
+            "success": "正常",
+            "rate_limited": "レート制限"
         },
         "cli_sync": {
             "title": "Agentツール一括設定",

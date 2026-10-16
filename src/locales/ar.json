@@ -1366,7 +1366,19 @@
             "model_name": "اسم النموذج",
             "model_id": "معرف النموذج",
             "description": "الوصف",
-            "action": "إجراء"
+            "status": "الحالة / الاتصال",
+            "action": "إجراء",
+            "test_connectivity": "فحص",
+            "batch_test": "فحص الكل",
+            "stop_test": "إيقاف",
+            "auto_dispatch": "🤖 توجيه تلقائي (مجمع البروكسي)",
+            "select_account": "تحديد الحساب",
+            "view_detail": "عرض تفاصيل الطلب والتأخير",
+            "retired": "تم إيقافه",
+            "untested": "لم يتم الفحص",
+            "testing": "جارٍ الفحص...",
+            "success": "طبيعي",
+            "rate_limited": "تم تجاوز المعدل"
         },
         "cli_sync": {
             "title": "الإعداد السريع لأدوات Agent",

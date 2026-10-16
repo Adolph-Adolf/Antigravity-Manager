@@ -1357,7 +1357,19 @@
             "model_name": "Nama Model",
             "model_id": "ID Model",
             "description": "Penerangan",
-            "action": "Tindakan"
+            "status": "Status / Ketersambungan",
+            "action": "Tindakan",
+            "test_connectivity": "Uji",
+            "batch_test": "Uji Semua",
+            "stop_test": "Henti",
+            "auto_dispatch": "🤖 Agihan Automatik (Kolam Proksi)",
+            "select_account": "Pilih Akaun",
+            "view_detail": "Lihat butiran permintaan & kependaman",
+            "retired": "Ditamatkan",
+            "untested": "Belum diuji",
+            "testing": "Menguji...",
+            "success": "Biasa",
+            "rate_limited": "Had Kadar"
         },
         "cli_sync": {
             "title": "Konfigurasi Alat Agent Satu-Klik",

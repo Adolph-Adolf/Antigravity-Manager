@@ -1400,7 +1400,19 @@
             "model_name": "Tên Model",
             "model_id": "ID Model",
             "description": "Mô tả",
-            "action": "Thao tác"
+            "status": "Trạng thái / Kết nối",
+            "action": "Thao tác",
+            "test_connectivity": "Kiểm tra",
+            "batch_test": "Kiểm tra tất cả",
+            "stop_test": "Dừng",
+            "auto_dispatch": "🤖 Điều phối tự động (Proxy Pool)",
+            "select_account": "Chọn tài khoản",
+            "view_detail": "Xem chi tiết yêu cầu & thời gian phản hồi",
+            "retired": "Đã ngừng hỗ trợ",
+            "untested": "Chưa kiểm tra",
+            "testing": "Đang kiểm tra...",
+            "success": "Bình thường",
+            "rate_limited": "Giới hạn tần suất"
         },
         "cloudflared": {
             "title": "Public Access (Cloudflared)",

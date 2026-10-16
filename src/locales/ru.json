@@ -1375,7 +1375,19 @@
             "model_name": "Название модели",
             "model_id": "ID модели",
             "description": "Описание",
-            "action": "Действие"
+            "status": "Статус / Связь",
+            "action": "Действие",
+            "test_connectivity": "Проверка",
+            "batch_test": "Проверить все",
+            "stop_test": "Стоп",
+            "auto_dispatch": "🤖 Авто-маршрутизация (Пул)",
+            "select_account": "Выбрать аккаунт",
+            "view_detail": "Подробности запроса и время отклика",
+            "retired": "Устарела",
+            "untested": "Не проверялось",
+            "testing": "Проверка...",
+            "success": "В норме",
+            "rate_limited": "Лимит (429)"
         },
         "cli_sync": {
             "title": "Быстрая настройка инструментов Agent",

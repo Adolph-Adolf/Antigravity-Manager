@@ -1375,7 +1375,19 @@
             "model_name": "모델 이름",
             "model_id": "모델 ID",
             "description": "설명",
-            "action": "작업"
+            "status": "상태 / 연결성",
+            "action": "작업",
+            "test_connectivity": "연결 테스트",
+            "batch_test": "전체 테스트",
+            "stop_test": "중지",
+            "auto_dispatch": "🤖 자동 디스패치 (프록시 풀)",
+            "select_account": "테스트 계정 선택",
+            "view_detail": "요청 세부 정보 및 지연 시간 보기",
+            "retired": "지원 종료",
+            "untested": "미테스트",
+            "testing": "테스트 중...",
+            "success": "정상",
+            "rate_limited": "제한됨"
         },
         "cli_sync": {
             "title": "Agent 도구 원클릭 설정",

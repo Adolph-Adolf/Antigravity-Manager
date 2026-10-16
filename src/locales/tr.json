@@ -1402,7 +1402,19 @@
             "model_name": "Model Adı",
             "model_id": "Model Kimliği",
             "description": "Açıklama",
-            "action": "İşlem"
+            "status": "Durum / Bağlantı",
+            "action": "İşlem",
+            "test_connectivity": "Test Et",
+            "batch_test": "Tümünü Test Et",
+            "stop_test": "Durdur",
+            "auto_dispatch": "🤖 Otomatik Yönlendirme (Havuz)",
+            "select_account": "Hesap Seç",
+            "view_detail": "İstek ayrıntılarını ve gecikmeyi görüntüle",
+            "retired": "Kullanımdan Kaldırıldı",
+            "untested": "Test Edilmedi",
+            "testing": "Test ediliyor...",
+            "success": "Normal",
+            "rate_limited": "Hız Sınırı"
         },
         "cloudflared": {
             "title": "Public Access (Cloudflared)",
