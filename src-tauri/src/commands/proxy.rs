@@ -5,7 +5,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tauri::State;
 use tokio::sync::RwLock;
-use tokio::time::Duration;
 
 /// 反代服务状态
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -915,7 +914,10 @@ async fn pick_auto_test_account(
         .collect();
 
     if candidates.is_empty() {
-        return Err("当前没有开启反代的可用账号，请先在账号页面开启至少一个账号的反代，或指定具体账号测试".to_string());
+        return Err(
+            "当前没有开启反代的可用账号，请先在账号页面开启至少一个账号的反代，或指定具体账号测试"
+                .to_string(),
+        );
     }
 
     // 优先选择配额充足且健康的账号 (按各模型中最高剩余配额从大到小排序)
@@ -945,4 +947,25 @@ async fn pick_auto_test_account(
     }
 
     Err(last_err.unwrap_or_else(|| "无法获取候选账号的有效凭证".to_string()))
+}
+
+/// 获取当前生效的官方 Hub 指纹信息
+#[tauri::command]
+pub async fn get_hub_fingerprint() -> Result<crate::modules::hub_version::HubFingerprint, String> {
+    Ok(crate::modules::hub_version::get_current_hub_fingerprint())
+}
+
+/// 强制探测官方远程更新源并返回最新 Hub 指纹信息
+#[tauri::command]
+pub async fn detect_remote_hub_fingerprint(
+    custom_version: Option<String>,
+    custom_cl: Option<String>,
+) -> Result<crate::modules::hub_version::HubFingerprint, String> {
+    let fp = crate::modules::hub_version::detect_and_update_hub_fingerprint(
+        custom_version.as_deref(),
+        custom_cl.as_deref(),
+    )
+    .await;
+
+    Ok(fp)
 }
