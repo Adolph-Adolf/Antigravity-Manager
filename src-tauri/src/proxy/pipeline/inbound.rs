@@ -92,6 +92,9 @@ impl InboundThinkingPipeline {
         // 将 `functionCall.id` 与 `functionResponse.id` 统一对齐为带 `_` 的标准形态 (`call_...`)。
         Self::normalize_tool_call_ids(contents);
 
+        // 0.05 工具名称双向自愈与非法回执降级防护（Pipeline First 统一治理，Fixes #3679）：
+        Self::repair_and_sanitize_tool_names(contents);
+
         // 0.1 连续工具调用轮次合并（Pipeline First 统一治理）：
         // 当客户端将并行工具调用拆散为多个连续的 assistant/model 轮次时，
         // 必须将其合并为一个单一的 model content 轮次。
@@ -732,6 +735,162 @@ impl InboundThinkingPipeline {
             );
         }
         normalized_count
+    }
+
+    /// 工具名称双向自愈与非法回执降级防护（Pipeline First 统一治理，Fixes #3679）：
+    /// 彻底解决由于客户端格式差异、上下文窗口裁剪或 Adapter 转换中未能识别出的 "unknown" 工具名，
+    /// 杜绝未经声明的 "unknown" 工具回执发送给上游导致 400 Bad Request 异常中断会话。
+    ///
+    /// 1. 扫描所有 `functionCall` 与 `functionResponse`，在 ID 规范化后建立健全的 `id -> name` 拓扑映射；
+    /// 2. 遍历修正所有 `name == "unknown"` 或空的 `functionResponse`：
+    ///    - 优先根据已规范化的 `id` 反查对应的合法工具名进行修复；
+    ///    - 其次若前置紧邻轮次有唯一对应的 `functionCall`，继承其工具名；
+    /// 3. 反向自愈：若 `functionCall` 的 `name == "unknown"`，亦可通过其 `id` 从回执中自愈；
+    /// 4. 兜底降级防护：
+    ///    若经过自愈后仍有 `functionResponse` 的名称为 "unknown" 或为空（例如上下文彻底被截断的孤儿回执），
+    ///    将其平滑降级为普通的文本内容部件（保持输出结果可供模型阅读），
+    ///    彻底消除上游因未声明工具名称直接抛出 400 崩溃的隐患。
+    pub fn repair_and_sanitize_tool_names(contents: &mut [Value]) -> usize {
+        let mut repaired_count = 0usize;
+        let mut id_to_name: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
+
+        // Pass 1: 扫描全会话中已知的合法工具调用与回执名称
+        for content in contents.iter() {
+            if let Some(parts) = content.get("parts").and_then(|p| p.as_array()) {
+                for part in parts {
+                    if let Some(fc) = part.get("functionCall") {
+                        if let Some(name) = fc.get("name").and_then(|v| v.as_str()) {
+                            if !name.is_empty() && name != "unknown" {
+                                if let Some(id) = fc.get("id").and_then(|v| v.as_str()) {
+                                    id_to_name.insert(id.to_string(), name.to_string());
+                                }
+                            }
+                        }
+                    }
+                    if let Some(fr) = part.get("functionResponse") {
+                        if let Some(name) = fr.get("name").and_then(|v| v.as_str()) {
+                            if !name.is_empty() && name != "unknown" {
+                                if let Some(id) = fr.get("id").and_then(|v| v.as_str()) {
+                                    id_to_name
+                                        .entry(id.to_string())
+                                        .or_insert_with(|| name.to_string());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Pass 2: 双向自愈与拓扑推断
+        let mut last_valid_fc_name: Option<String> = None;
+        for content in contents.iter_mut() {
+            if let Some(parts) = content.get_mut("parts").and_then(|p| p.as_array_mut()) {
+                for part in parts.iter_mut() {
+                    // 自愈 functionCall
+                    if let Some(fc) = part.get_mut("functionCall").and_then(|v| v.as_object_mut()) {
+                        let name_is_invalid = fc
+                            .get("name")
+                            .and_then(|v| v.as_str())
+                            .map_or(true, |n| n.is_empty() || n == "unknown");
+                        if name_is_invalid {
+                            if let Some(id) = fc.get("id").and_then(|v| v.as_str()) {
+                                if let Some(repaired_name) = id_to_name.get(id) {
+                                    fc.insert("name".to_string(), serde_json::json!(repaired_name));
+                                    repaired_count += 1;
+                                }
+                            }
+                        }
+                        if let Some(valid_name) = fc.get("name").and_then(|v| v.as_str()) {
+                            if !valid_name.is_empty() && valid_name != "unknown" {
+                                last_valid_fc_name = Some(valid_name.to_string());
+                            }
+                        }
+                    }
+
+                    // 自愈 functionResponse
+                    if let Some(fr) = part
+                        .get_mut("functionResponse")
+                        .and_then(|v| v.as_object_mut())
+                    {
+                        let name_is_invalid = fr
+                            .get("name")
+                            .and_then(|v| v.as_str())
+                            .map_or(true, |n| n.is_empty() || n == "unknown");
+                        if name_is_invalid {
+                            let mut repaired = false;
+                            if let Some(id) = fr.get("id").and_then(|v| v.as_str()) {
+                                if let Some(repaired_name) = id_to_name.get(id) {
+                                    fr.insert("name".to_string(), serde_json::json!(repaired_name));
+                                    repaired_count += 1;
+                                    repaired = true;
+                                }
+                            }
+                            if !repaired {
+                                if let Some(ref fallback_name) = last_valid_fc_name {
+                                    fr.insert("name".to_string(), serde_json::json!(fallback_name));
+                                    repaired_count += 1;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Pass 3: 孤儿且无法自愈的非法 functionResponse 降级防护
+        for content in contents.iter_mut() {
+            if let Some(parts) = content.get_mut("parts").and_then(|p| p.as_array_mut()) {
+                for part in parts.iter_mut() {
+                    let should_degrade = if let Some(fr) = part.get("functionResponse") {
+                        fr.get("name")
+                            .and_then(|v| v.as_str())
+                            .map_or(true, |n| n.is_empty() || n == "unknown")
+                    } else {
+                        false
+                    };
+
+                    if should_degrade {
+                        if let Some(fr) = part.get("functionResponse") {
+                            let output_text = if let Some(resp) = fr.get("response") {
+                                if let Some(out) = resp.get("output").and_then(|o| o.as_str()) {
+                                    out.to_string()
+                                } else if let Some(out_str) = resp.as_str() {
+                                    out_str.to_string()
+                                } else {
+                                    serde_json::to_string(resp).unwrap_or_default()
+                                }
+                            } else {
+                                String::new()
+                            };
+
+                            let degraded_text = if output_text.trim().is_empty() {
+                                "[Tool execution finished with empty output]".to_string()
+                            } else {
+                                format!("[Tool Output]:\n{}", output_text)
+                            };
+
+                            tracing::warn!(
+                                "[InboundPipeline] Degraded orphan 'unknown' functionResponse to plain text to prevent upstream 400 error"
+                            );
+                            *part = serde_json::json!({
+                                "text": degraded_text
+                            });
+                            repaired_count += 1;
+                        }
+                    }
+                }
+            }
+        }
+
+        if repaired_count > 0 {
+            tracing::info!(
+                "[InboundPipeline] Repaired or sanitized {} tool call/response(s)",
+                repaired_count
+            );
+        }
+        repaired_count
     }
 
     /// 连续工具调用轮次合并（Pipeline First 统一治理）：
@@ -3744,5 +3903,68 @@ mod tests {
         assert_eq!(safety.len(), 2, "不支持的分类必须被过滤");
         assert_eq!(safety[0]["category"], "HARM_CATEGORY_HARASSMENT");
         assert_eq!(safety[1]["category"], "HARM_CATEGORY_HATE_SPEECH");
+    }
+
+    #[test]
+    fn test_repair_and_sanitize_tool_names_repairs_unknown_from_matching_id_issue_3679() {
+        let mut contents = vec![
+            json!({
+                "role": "model",
+                "parts": [
+                    {
+                        "functionCall": {
+                            "id": "call_abc123",
+                            "name": "run_command",
+                            "args": { "command": "cargo test" }
+                        }
+                    }
+                ]
+            }),
+            json!({
+                "role": "user",
+                "parts": [
+                    {
+                        "functionResponse": {
+                            "id": "call_abc123",
+                            "name": "unknown",
+                            "response": { "output": "ok" }
+                        }
+                    }
+                ]
+            }),
+        ];
+
+        let repaired = InboundThinkingPipeline::repair_and_sanitize_tool_names(&mut contents);
+        assert_eq!(repaired, 1);
+        assert_eq!(
+            contents[1]["parts"][0]["functionResponse"]["name"], "run_command",
+            "具有匹配 ID 的 'unknown' functionResponse 必须被自动自愈为正确的工具名 (Fixes #3679)"
+        );
+    }
+
+    #[test]
+    fn test_repair_and_sanitize_tool_names_degrades_orphan_unknown_response_issue_3679() {
+        let mut contents = vec![json!({
+            "role": "user",
+            "parts": [
+                {
+                    "functionResponse": {
+                        "id": "call_orphan",
+                        "name": "unknown",
+                        "response": { "output": "something happened" }
+                    }
+                }
+            ]
+        })];
+
+        let count = InboundThinkingPipeline::repair_and_sanitize_tool_names(&mut contents);
+        assert_eq!(count, 1);
+        let part = &contents[0]["parts"][0];
+        assert!(
+            part.get("functionResponse").is_none(),
+            "无法自愈的孤儿 'unknown' 工具回执必须被降级，彻底杜绝上游 400 校验异常"
+        );
+        let text = part["text"].as_str().expect("必须降级为文本 part");
+        assert!(text.contains("something happened"));
     }
 }

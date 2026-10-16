@@ -1290,24 +1290,41 @@ pub async fn handle_generate(
 pub async fn handle_list_models(
     State(state): State<AppState>,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
-    use crate::proxy::common::model_mapping::get_all_dynamic_models;
+    use crate::proxy::common::model_mapping::{
+        get_all_dynamic_models, get_all_dynamic_models_metadata,
+    };
 
     // 获取所有动态模型列表（与 /v1/models 一致）
     let only_raw = *state.only_raw_quota_models.read().await;
     let model_ids =
         get_all_dynamic_models(&state.custom_mapping, Some(&state.token_manager), only_raw).await;
+    let metadata_map = get_all_dynamic_models_metadata(
+        &state.custom_mapping,
+        Some(&state.token_manager),
+        only_raw,
+    )
+    .await;
 
     // 转换为 Gemini API 格式
     let models: Vec<_> = model_ids
         .into_iter()
         .map(|id| {
+            let meta = metadata_map
+                .get(&id)
+                .or_else(|| metadata_map.get(&id.to_lowercase()));
+            let display_name = meta
+                .and_then(|m| m.display_name.clone())
+                .unwrap_or_else(|| id.clone());
+            let input_limit = meta.and_then(|m| m.max_tokens).unwrap_or(128000);
+            let output_limit = meta.and_then(|m| m.max_output_tokens).unwrap_or(8192);
+
             json!({
                 "name": format!("models/{}", id),
                 "version": "001",
-                "displayName": id.clone(),
+                "displayName": display_name,
                 "description": "",
-                "inputTokenLimit": 128000,
-                "outputTokenLimit": 8192,
+                "inputTokenLimit": input_limit,
+                "outputTokenLimit": output_limit,
                 "supportedGenerationMethods": ["generateContent", "countTokens"],
                 "temperature": 1.0,
                 "topP": 0.95,
@@ -1323,7 +1340,9 @@ pub async fn handle_get_model(
     State(state): State<AppState>,
     Path(model_name): Path<String>,
 ) -> impl IntoResponse {
-    use crate::proxy::common::model_mapping::find_dynamic_model;
+    use crate::proxy::common::model_mapping::{
+        find_dynamic_model, get_all_dynamic_models_metadata,
+    };
 
     let only_raw = *state.only_raw_quota_models.read().await;
     if let Some(matched_id) = find_dynamic_model(
@@ -1334,15 +1353,31 @@ pub async fn handle_get_model(
     )
     .await
     {
+        let metadata_map = get_all_dynamic_models_metadata(
+            &state.custom_mapping,
+            Some(&state.token_manager),
+            only_raw,
+        )
+        .await;
+
+        let meta = metadata_map
+            .get(&matched_id)
+            .or_else(|| metadata_map.get(&matched_id.to_lowercase()));
+        let display_name = meta
+            .and_then(|m| m.display_name.clone())
+            .unwrap_or_else(|| matched_id.clone());
+        let input_limit = meta.and_then(|m| m.max_tokens).unwrap_or(128000);
+        let output_limit = meta.and_then(|m| m.max_output_tokens).unwrap_or(8192);
+
         (
             StatusCode::OK,
             Json(json!({
                 "name": format!("models/{}", matched_id),
                 "version": "001",
-                "displayName": matched_id,
+                "displayName": display_name,
                 "description": "",
-                "inputTokenLimit": 128000,
-                "outputTokenLimit": 8192,
+                "inputTokenLimit": input_limit,
+                "outputTokenLimit": output_limit,
                 "supportedGenerationMethods": ["generateContent", "countTokens"],
                 "temperature": 1.0,
                 "topP": 0.95,

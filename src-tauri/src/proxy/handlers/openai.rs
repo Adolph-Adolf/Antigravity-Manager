@@ -350,6 +350,22 @@ fn responses_input_item_type(item: &Value) -> &str {
         .unwrap_or("")
 }
 
+fn responses_item_tool_name(item: &Value) -> Option<&str> {
+    item.get("name")
+        .and_then(Value::as_str)
+        .or_else(|| {
+            item.get("function")
+                .and_then(|f| f.get("name"))
+                .and_then(Value::as_str)
+        })
+        .or_else(|| item.get("tool_name").and_then(Value::as_str))
+        .or_else(|| {
+            item.get("tool")
+                .and_then(|t| t.get("name"))
+                .and_then(Value::as_str)
+        })
+}
+
 fn push_responses_content_part(
     mut part: Value,
     text_parts: &mut Vec<String>,
@@ -3332,9 +3348,7 @@ pub async fn handle_completions(
                         } else if item_type == "web_search_call" {
                             "google_search"
                         } else {
-                            item.get("name")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("unknown")
+                            responses_item_tool_name(item).unwrap_or("unknown")
                         };
 
                         call_id_to_name.insert(call_id.to_string(), name.to_string());
@@ -3465,10 +3479,7 @@ pub async fn handle_completions(
                     }
                     "function_call" | "custom_tool_call" | "local_shell_call"
                     | "web_search_call" => {
-                        let mut name = item
-                            .get("name")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("unknown");
+                        let mut name = responses_item_tool_name(&item).unwrap_or("unknown");
                         let mut args_str = item
                             .get("arguments")
                             .and_then(|v| v.as_str())
@@ -5017,21 +5028,42 @@ pub async fn handle_completions(
 }
 
 pub async fn handle_list_models(State(state): State<AppState>) -> impl IntoResponse {
-    use crate::proxy::common::model_mapping::get_all_dynamic_models;
+    use crate::proxy::common::model_mapping::{
+        get_all_dynamic_models, get_all_dynamic_models_metadata,
+    };
 
     let only_raw = *state.only_raw_quota_models.read().await;
     let model_ids =
         get_all_dynamic_models(&state.custom_mapping, Some(&state.token_manager), only_raw).await;
+    let metadata_map = get_all_dynamic_models_metadata(
+        &state.custom_mapping,
+        Some(&state.token_manager),
+        only_raw,
+    )
+    .await;
 
     let data: Vec<_> = model_ids
         .into_iter()
         .map(|id| {
-            json!({
+            let mut obj = json!({
                 "id": id,
                 "object": "model",
                 "created": 1706745600,
                 "owned_by": "antigravity"
-            })
+            });
+            let meta = metadata_map
+                .get(&id)
+                .or_else(|| metadata_map.get(&id.to_lowercase()));
+            if let Some(m) = meta {
+                if let Ok(serde_json::Value::Object(map)) = serde_json::to_value(m) {
+                    if let Some(target) = obj.as_object_mut() {
+                        for (k, v) in map {
+                            target.insert(k, v);
+                        }
+                    }
+                }
+            }
+            obj
         })
         .collect();
 
@@ -5047,7 +5079,9 @@ pub async fn handle_retrieve_model(
     State(state): State<AppState>,
     axum::extract::Path(model): axum::extract::Path<String>,
 ) -> impl IntoResponse {
-    use crate::proxy::common::model_mapping::find_dynamic_model;
+    use crate::proxy::common::model_mapping::{
+        find_dynamic_model, get_all_dynamic_models_metadata,
+    };
 
     let only_raw = *state.only_raw_quota_models.read().await;
     if let Some(matched_id) = find_dynamic_model(
@@ -5058,16 +5092,33 @@ pub async fn handle_retrieve_model(
     )
     .await
     {
-        (
-            StatusCode::OK,
-            Json(json!({
-                "id": matched_id,
-                "object": "model",
-                "created": 1706745600,
-                "owned_by": "antigravity"
-            })),
+        let metadata_map = get_all_dynamic_models_metadata(
+            &state.custom_mapping,
+            Some(&state.token_manager),
+            only_raw,
         )
-            .into_response()
+        .await;
+
+        let mut obj = json!({
+            "id": matched_id,
+            "object": "model",
+            "created": 1706745600,
+            "owned_by": "antigravity"
+        });
+        let meta = metadata_map
+            .get(&matched_id)
+            .or_else(|| metadata_map.get(&matched_id.to_lowercase()));
+        if let Some(m) = meta {
+            if let Ok(serde_json::Value::Object(map)) = serde_json::to_value(m) {
+                if let Some(target) = obj.as_object_mut() {
+                    for (k, v) in map {
+                        target.insert(k, v);
+                    }
+                }
+            }
+        }
+
+        (StatusCode::OK, Json(obj)).into_response()
     } else {
         (
             StatusCode::NOT_FOUND,
@@ -6927,16 +6978,15 @@ fn convert_codex_to_openai_request(mut body: Value) -> Value {
                         .and_then(|v| v.as_str())
                         .or_else(|| item.get("id").and_then(|v| v.as_str()))
                         .unwrap_or("unknown");
-                    let mut name = item
-                        .get("name")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("unknown")
-                        .to_string();
-                    if item_type == "local_shell_call" && name == "unknown" {
-                        name = "local_shell_call".to_string();
-                    } else if item_type == "web_search_call" && name == "unknown" {
-                        name = "web_search_call".to_string();
-                    }
+                    let name = if item_type == "local_shell_call" {
+                        "local_shell_call".to_string()
+                    } else if item_type == "web_search_call" {
+                        "web_search_call".to_string()
+                    } else {
+                        responses_item_tool_name(&item)
+                            .unwrap_or("unknown")
+                            .to_string()
+                    };
                     call_id_to_name.insert(call_id.to_string(), name);
                 }
                 _ => {}
@@ -6987,10 +7037,7 @@ fn convert_codex_to_openai_request(mut body: Value) -> Value {
                     }
                 }
                 "function_call" | "custom_tool_call" | "local_shell_call" | "web_search_call" => {
-                    let mut name = item
-                        .get("name")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("unknown");
+                    let mut name = responses_item_tool_name(&item).unwrap_or("unknown");
                     let mut args_str = item
                         .get("arguments")
                         .and_then(|v| v.as_str())

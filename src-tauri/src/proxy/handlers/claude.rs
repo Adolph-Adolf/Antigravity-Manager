@@ -2852,21 +2852,42 @@ pub async fn handle_messages(
 
 /// 列出可用模型
 pub async fn handle_list_models(State(state): State<AppState>) -> impl IntoResponse {
-    use crate::proxy::common::model_mapping::get_all_dynamic_models;
+    use crate::proxy::common::model_mapping::{
+        get_all_dynamic_models, get_all_dynamic_models_metadata,
+    };
 
     let only_raw = *state.only_raw_quota_models.read().await;
     let model_ids =
         get_all_dynamic_models(&state.custom_mapping, Some(&state.token_manager), only_raw).await;
+    let metadata_map = get_all_dynamic_models_metadata(
+        &state.custom_mapping,
+        Some(&state.token_manager),
+        only_raw,
+    )
+    .await;
 
     let data: Vec<_> = model_ids
         .into_iter()
         .map(|id| {
-            json!({
+            let mut obj = json!({
                 "id": id,
                 "object": "model",
                 "created": 1706745600,
                 "owned_by": "antigravity"
-            })
+            });
+            let meta = metadata_map
+                .get(&id)
+                .or_else(|| metadata_map.get(&id.to_lowercase()));
+            if let Some(m) = meta {
+                if let Ok(serde_json::Value::Object(map)) = serde_json::to_value(m) {
+                    if let Some(target) = obj.as_object_mut() {
+                        for (k, v) in map {
+                            target.insert(k, v);
+                        }
+                    }
+                }
+            }
+            obj
         })
         .collect();
 
@@ -2882,7 +2903,9 @@ pub async fn handle_retrieve_model(
     State(state): State<AppState>,
     axum::extract::Path(model): axum::extract::Path<String>,
 ) -> impl IntoResponse {
-    use crate::proxy::common::model_mapping::find_dynamic_model;
+    use crate::proxy::common::model_mapping::{
+        find_dynamic_model, get_all_dynamic_models_metadata,
+    };
 
     let only_raw = *state.only_raw_quota_models.read().await;
     if let Some(matched_id) = find_dynamic_model(
@@ -2893,16 +2916,40 @@ pub async fn handle_retrieve_model(
     )
     .await
     {
-        (
-            StatusCode::OK,
-            Json(json!({
-                "type": "model",
-                "id": matched_id.clone(),
-                "display_name": matched_id,
-                "created_at": "2024-10-22T00:00:00Z"
-            })),
+        let metadata_map = get_all_dynamic_models_metadata(
+            &state.custom_mapping,
+            Some(&state.token_manager),
+            only_raw,
         )
-            .into_response()
+        .await;
+
+        let meta = metadata_map
+            .get(&matched_id)
+            .or_else(|| metadata_map.get(&matched_id.to_lowercase()));
+        let display_name = meta
+            .and_then(|m| m.display_name.clone())
+            .unwrap_or_else(|| matched_id.clone());
+
+        let mut obj = json!({
+            "type": "model",
+            "id": matched_id.clone(),
+            "display_name": display_name,
+            "created_at": "2024-10-22T00:00:00Z"
+        });
+
+        if let Some(m) = meta {
+            if let Ok(serde_json::Value::Object(map)) = serde_json::to_value(m) {
+                if let Some(target) = obj.as_object_mut() {
+                    for (k, v) in map {
+                        if k != "display_name" {
+                            target.insert(k, v);
+                        }
+                    }
+                }
+            }
+        }
+
+        (StatusCode::OK, Json(obj)).into_response()
     } else {
         (
             StatusCode::NOT_FOUND,
