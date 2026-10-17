@@ -36,7 +36,10 @@ pub fn sanitize_user_text_for_fingerprint(raw: &str) -> String {
     while let Some(rel_start) = s[search_from..].find("[System") {
         let start = search_from + rel_start;
         let after_prefix = &s[start + "[System".len()..];
-        if after_prefix.starts_with(':') || after_prefix.starts_with(' ') || after_prefix.starts_with(']') {
+        if after_prefix.starts_with(':')
+            || after_prefix.starts_with(' ')
+            || after_prefix.starts_with(']')
+        {
             if let Some(end) = s[start..].find(']') {
                 s.replace_range(start..start + end + 1, "");
                 continue;
@@ -59,12 +62,17 @@ fn extract_claude_content_summary(content: &MessageContent) -> String {
                     crate::proxy::mappers::claude::models::ContentBlock::Text { text } => {
                         parts.push(text.clone());
                     }
-                    crate::proxy::mappers::claude::models::ContentBlock::Image { source, .. } => {
+                    crate::proxy::mappers::claude::models::ContentBlock::Image {
+                        source, ..
+                    } => {
                         let mime = source.media_type.as_deref().unwrap_or("image");
                         let len = source.data.as_ref().map(|d| d.len()).unwrap_or(0);
                         parts.push(format!("[image:{}:{}]", mime, len));
                     }
-                    crate::proxy::mappers::claude::models::ContentBlock::Document { source, .. } => {
+                    crate::proxy::mappers::claude::models::ContentBlock::Document {
+                        source,
+                        ..
+                    } => {
                         let mime = source.media_type.as_deref().unwrap_or("document");
                         let len = source.data.as_ref().map(|d| d.len()).unwrap_or(0);
                         parts.push(format!("[document:{}:{}]", mime, len));
@@ -99,7 +107,9 @@ fn extract_openai_content_summary(content: &OpenAIContent) -> String {
                     crate::proxy::mappers::openai::models::OpenAIContentBlock::Text { text } => {
                         parts.push(text.clone());
                     }
-                    crate::proxy::mappers::openai::models::OpenAIContentBlock::ImageUrl { image_url } => {
+                    crate::proxy::mappers::openai::models::OpenAIContentBlock::ImageUrl {
+                        image_url,
+                    } => {
                         if image_url.url.starts_with("data:") {
                             let prefix = image_url.url.split(';').next().unwrap_or("data:image");
                             parts.push(format!("[image:{}:{}]", prefix, image_url.url.len()));
@@ -107,14 +117,20 @@ fn extract_openai_content_summary(content: &OpenAIContent) -> String {
                             parts.push(format!("[image:{}]", image_url.url));
                         }
                     }
-                    crate::proxy::mappers::openai::models::OpenAIContentBlock::AudioUrl { audio_url } => {
+                    crate::proxy::mappers::openai::models::OpenAIContentBlock::AudioUrl {
+                        audio_url,
+                    } => {
                         parts.push(format!("[audio:{}]", audio_url.url));
                     }
-                    crate::proxy::mappers::openai::models::OpenAIContentBlock::InputAudio { input_audio } => {
+                    crate::proxy::mappers::openai::models::OpenAIContentBlock::InputAudio {
+                        input_audio,
+                    } => {
                         let fmt = input_audio.format.as_deref().unwrap_or("audio");
                         parts.push(format!("[audio:{}:{}]", fmt, input_audio.data.len()));
                     }
-                    crate::proxy::mappers::openai::models::OpenAIContentBlock::VideoUrl { video_url } => {
+                    crate::proxy::mappers::openai::models::OpenAIContentBlock::VideoUrl {
+                        video_url,
+                    } => {
                         parts.push(format!("[video:{}]", video_url.url));
                     }
                 }
@@ -130,7 +146,8 @@ fn extract_gemini_parts_summary(parts: &[Value]) -> String {
     for part in parts {
         if let Some(text) = part.get("text").and_then(|v| v.as_str()) {
             text_parts.push(text.to_string());
-        } else if let Some(inline_data) = part.get("inlineData").or_else(|| part.get("inline_data")) {
+        } else if let Some(inline_data) = part.get("inlineData").or_else(|| part.get("inline_data"))
+        {
             let mime = inline_data
                 .get("mimeType")
                 .or_else(|| inline_data.get("mime_type"))
@@ -149,10 +166,16 @@ fn extract_gemini_parts_summary(parts: &[Value]) -> String {
                 .and_then(|u| u.as_str())
                 .unwrap_or("file");
             text_parts.push(format!("[fileData:{}]", uri));
-        } else if let Some(fc) = part.get("functionCall").or_else(|| part.get("function_call")) {
+        } else if let Some(fc) = part
+            .get("functionCall")
+            .or_else(|| part.get("function_call"))
+        {
             let name = fc.get("name").and_then(|n| n.as_str()).unwrap_or("func");
             text_parts.push(format!("[functionCall:{}]", name));
-        } else if let Some(fr) = part.get("functionResponse").or_else(|| part.get("function_response")) {
+        } else if let Some(fr) = part
+            .get("functionResponse")
+            .or_else(|| part.get("function_response"))
+        {
             let name = fr.get("name").and_then(|n| n.as_str()).unwrap_or("func");
             text_parts.push(format!("[functionResponse:{}]", name));
         }
