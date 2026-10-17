@@ -2299,19 +2299,67 @@ pub fn detect_active_clients_status() -> Result<crate::models::ActiveClientsStat
         }
     }
 
-    // 2. 探测 CLI (agy) 当前账号 (macOS Keychain / Linux Secret-Service / CLI 文件凭据)
-    if let Ok(keyring_state) = crate::modules::integration::read_from_system_keyring_only() {
-        if let Some(acc) = find_by_rt(&keyring_state.refresh_token) {
-            status.agy_account_id = Some(acc.id.clone());
-            status.agy_email = Some(acc.email);
+    // 2. 读取底层凭据
+    // 系统钥匙串（Keyring / Secret Service）：Antigravity 2.0+ 原生经典款与 CLI 共享的核心凭据
+    let keyring_acc = crate::modules::integration::read_from_system_keyring_only()
+        .ok()
+        .and_then(|st| find_by_rt(&st.refresh_token));
+
+    // CLI 专属独立文件凭据 (~/.gemini/antigravity-cli/antigravity-oauth-token)
+    let cli_file_acc = crate::modules::integration::read_antigravity_cli_credentials()
+        .first()
+        .and_then(|st| find_by_rt(&st.refresh_token));
+
+    // 经典款旧版 SQLite 数据库 (Antigravity < 2.0.0)
+    let classic_db_acc = crate::modules::db::get_db_path(Some("classic"))
+        .ok()
+        .filter(|p| p.exists())
+        .and_then(|p| crate::modules::migration::extract_oauth_state_from_file(&p).ok())
+        .and_then(|st| find_by_rt(&st.refresh_token));
+
+    // 判断经典款是否为 2.0+ 原生版本（>= 2.0.0 使用 Keyring，< 2.0.0 使用 SQLite）
+    let is_classic_v2 = crate::modules::version::get_antigravity_version_with_path(Some("classic"), None)
+        .map(|v| crate::modules::version::compare_version(&v.short_version, "2.0.0") != std::cmp::Ordering::Less)
+        .unwrap_or(true);
+
+    // 3. 确定经典款当前账号
+    if is_classic_v2 {
+        if let Some(ref k_acc) = keyring_acc {
+            if index.current_target_ide.as_deref() != Some("agy")
+                || index.current_classic_account_id.as_deref() == Some(&k_acc.id)
+            {
+                status.classic_account_id = Some(k_acc.id.clone());
+                status.classic_email = Some(k_acc.email.clone());
+            }
+        }
+    } else if let Some(ref db_acc) = classic_db_acc {
+        status.classic_account_id = Some(db_acc.id.clone());
+        status.classic_email = Some(db_acc.email.clone());
+    }
+    if status.classic_email.is_none() {
+        if let Some(ref id) = status.classic_account_id {
+            if let Some(acc) = find_by_id(id) {
+                status.classic_email = Some(acc.email);
+            }
+        }
+    }
+
+    // 4. 确定 CLI (agy) 当前账号
+    if let Some(ref c_acc) = cli_file_acc {
+        if index.current_target_ide.as_deref() == Some("agy")
+            || index.current_agy_account_id.as_deref() == Some(&c_acc.id)
+        {
+            status.agy_account_id = Some(c_acc.id.clone());
+            status.agy_email = Some(c_acc.email.clone());
         }
     }
     if status.agy_email.is_none() {
-        let cli_states = crate::modules::integration::read_antigravity_cli_credentials();
-        if let Some(first_cli) = cli_states.first() {
-            if let Some(acc) = find_by_rt(&first_cli.refresh_token) {
-                status.agy_account_id = Some(acc.id.clone());
-                status.agy_email = Some(acc.email);
+        if let Some(ref k_acc) = keyring_acc {
+            if index.current_target_ide.as_deref() == Some("agy")
+                || index.current_agy_account_id.as_deref() == Some(&k_acc.id)
+            {
+                status.agy_account_id = Some(k_acc.id.clone());
+                status.agy_email = Some(k_acc.email.clone());
             }
         }
     }
@@ -2319,25 +2367,6 @@ pub fn detect_active_clients_status() -> Result<crate::models::ActiveClientsStat
         if let Some(ref id) = status.agy_account_id {
             if let Some(acc) = find_by_id(id) {
                 status.agy_email = Some(acc.email);
-            }
-        }
-    }
-
-    // 3. 探测经典款当前账号 (经典款专属 DB: ~/Library/Application Support/Antigravity/User/globalStorage/state.vscdb)
-    if let Ok(db_path) = crate::modules::db::get_db_path(Some("classic")) {
-        if db_path.exists() {
-            if let Ok(oauth_state) = crate::modules::migration::extract_oauth_state_from_file(&db_path) {
-                if let Some(acc) = find_by_rt(&oauth_state.refresh_token) {
-                    status.classic_account_id = Some(acc.id.clone());
-                    status.classic_email = Some(acc.email);
-                }
-            }
-        }
-    }
-    if status.classic_email.is_none() {
-        if let Some(ref id) = status.classic_account_id {
-            if let Some(acc) = find_by_id(id) {
-                status.classic_email = Some(acc.email);
             }
         }
     }
