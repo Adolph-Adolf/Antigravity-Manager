@@ -28,8 +28,10 @@ function Dashboard() {
     const {
         accounts,
         currentAccount,
+        activeClients,
         fetchAccounts,
         fetchCurrentAccount,
+        fetchActiveClients,
         switchAccount,
         addAccount,
         refreshQuota,
@@ -39,6 +41,23 @@ function Dashboard() {
     useEffect(() => {
         fetchAccounts();
         fetchCurrentAccount();
+        fetchActiveClients();
+
+        // 保持 5 秒轮询三大客户端（经典款 / IDE / CLI）当前生效账号状态
+        const intervalId = setInterval(() => {
+            fetchActiveClients();
+        }, 5000);
+
+        // 窗口聚焦时即刻拉取最新客户端状态
+        const handleFocus = () => {
+            fetchActiveClients();
+        };
+        window.addEventListener('focus', handleFocus);
+
+        return () => {
+            clearInterval(intervalId);
+            window.removeEventListener('focus', handleFocus);
+        };
     }, []);
 
     const [onlyProxyPool, setOnlyProxyPool] = useState<boolean>(() => {
@@ -274,13 +293,13 @@ function Dashboard() {
 
     const isSwitchingRef = useRef(false);
 
-    const handleSwitch = async (accountId: string) => {
+    const handleSwitch = async (accountId: string, targetIde?: string) => {
         if (loading || isSwitchingRef.current) return;
 
         isSwitchingRef.current = true;
-        console.log('[Dashboard] handleSwitch called for', accountId);
+        console.log('[Dashboard] handleSwitch called for', accountId, 'targetIde:', targetIde);
         try {
-            await switchAccount(accountId);
+            await switchAccount(accountId, targetIde);
             showToast(t('dashboard.toast.switch_success'), 'success');
         } catch (error) {
             console.error('切换账号失败:', error);
@@ -862,11 +881,14 @@ function Dashboard() {
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <CurrentAccount
                         account={currentAccount}
-                        onSwitch={() => navigate('/accounts')}
+                        accounts={accounts}
+                        activeClients={activeClients}
+                        onSwitch={(targetIde) => navigate('/accounts', { state: { targetIde } })}
                     />
                     <BestAccounts
                         accounts={accounts}
                         currentAccountId={currentAccount?.id}
+                        activeClients={activeClients}
                         onSwitch={handleSwitch}
                     />
                 </div>
