@@ -117,15 +117,15 @@ pub fn sanitize_error_for_log(error_text: &str) -> String {
 // 只对 408 / 404 / 5xx 回退 → 400 不触发回退，故 Sandbox 排首位会让已验证可用的
 // Daily 永远不被尝试。Sandbox 保留为回退项、回退判定规则不变 ——
 // **不对所有 400 无条件重试**。
+#[allow(dead_code)]
 const V1_INTERNAL_BASE_URL_PROD: &str = "https://cloudcode-pa.googleapis.com/v1internal";
 const V1_INTERNAL_BASE_URL_DAILY: &str = "https://daily-cloudcode-pa.googleapis.com/v1internal";
 const V1_INTERNAL_BASE_URL_SANDBOX: &str =
     "https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal";
 
-pub const V1_INTERNAL_BASE_URL_FALLBACKS: [&str; 3] = [
+pub const V1_INTERNAL_BASE_URL_FALLBACKS: [&str; 2] = [
     V1_INTERNAL_BASE_URL_DAILY, // 优先级 1: Daily (官方 IDE 原生主力端点，毫秒级响应，稳定支持长流式与思维链)
-    V1_INTERNAL_BASE_URL_SANDBOX, // 优先级 2: Sandbox (沙箱备用，极速响应，遇地域限制秒切)
-    V1_INTERNAL_BASE_URL_PROD,  // 优先级 3: Prod (生产集群，大流式易遇 GFE 假死，作为深层兜底)
+    V1_INTERNAL_BASE_URL_SANDBOX, // 优先级 2: Sandbox (沙箱备用，极速响应，实测完美承载 100k+ 上下文，无缝容灾)
 ];
 
 /// 提取端点的主机名或规范标识，使不同 API 路径（如 :loadCodeAssist、:fetchAvailableModels、v1internal）
@@ -680,8 +680,11 @@ impl UpstreamClient {
 
                 // [WATCHDOG] 端点级自适应防假死超时：当还有备用候选端点时，根据请求体体积动态计算超时（保底 15s，大请求按 256KB/s 延展），
                 // 既防止上游故障端点无响应静默挂起 56 秒阻塞链路，又防止 11MB 等超大 prompt 因 12s 误判切号而导致雪崩中断（Fixes #3506）
-                let watchdog_secs =
-                    std::cmp::max(15, (body_bytes.len() as u64) / (256 * 1024) + 15);
+                let watchdog_secs = if method == "streamGenerateContent" {
+                    std::cmp::max(120, (body_bytes.len() as u64) / (64 * 1024) + 120)
+                } else {
+                    std::cmp::max(15, (body_bytes.len() as u64) / (256 * 1024) + 15)
+                };
                 let send_future = req_builder.send();
                 let response = if has_next {
                     match tokio::time::timeout(
@@ -1203,7 +1206,6 @@ mod tests {
             [
                 V1_INTERNAL_BASE_URL_DAILY,
                 V1_INTERNAL_BASE_URL_SANDBOX,
-                V1_INTERNAL_BASE_URL_PROD,
             ]
         );
     }
