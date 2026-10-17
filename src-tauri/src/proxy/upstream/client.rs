@@ -555,11 +555,10 @@ impl UpstreamClient {
             header::CONTENT_TYPE,
             header::HeaderValue::from_static("application/json"),
         );
-        headers.insert(
-            header::AUTHORIZATION,
-            header::HeaderValue::from_str(&format!("Bearer {}", access_token))
-                .map_err(|e| e.to_string())?,
-        );
+        let mut auth_val = header::HeaderValue::from_str(&format!("Bearer {}", access_token))
+            .map_err(|e| e.to_string())?;
+        auth_val.set_sensitive(true);
+        headers.insert(header::AUTHORIZATION, auth_val);
 
         headers.insert(
             header::USER_AGENT,

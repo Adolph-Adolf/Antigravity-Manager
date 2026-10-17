@@ -57,6 +57,10 @@ static RE_WAF_TRIGGER_HEADERS: Lazy<Regex> = Lazy::new(|| {
 /// 连续多余空行收拢正则（剥离元数据后若产生 3 个及以上连续换行，收拢为 2 个换行以保持自然段落）
 static RE_MULTI_NEWLINE: Lazy<Regex> = Lazy::new(|| Regex::new(r"\n{3,}").unwrap());
 
+/// 代码块占位符单趟还原正则（杜绝顺序字符串替换导致的嵌套膨胀炸弹与 $2^N$ 性能陷阱）
+static RE_CODE_BLOCK_PLACEHOLDER: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"__PROMPT_SANITIZER_CODE_BLOCK_(\d+)__").unwrap());
+
 // ============================ System 轨：身份声明归一化 ============================
 //
 // 触发上游 WAF 伪限流（虚假 429 RESOURCE_EXHAUSTED）的是**身份归属声明**，而非模型能力或请求体量：
@@ -104,10 +108,10 @@ static RE_IDENTITY_DECLARATION: Lazy<Regex> = Lazy::new(|| {
         // C. 归属 / 版本声明（动词 + 介词，或 based on）
         r"(?i:[^.!?。！？\r\n<>]{0,8}?\b(?:created|built|made|developed|designed|trained|powered|maintained|published|released|provided)\s+(?:by|on|upon|at)\s+",
         r"|[^.!?。！？\r\n<>]{0,8}?\bbased\s+on\s+)",
-        // D. 归属对象：一路取到句读边界，杜绝残留孤立词片段
-        r"[^.,，。\r\n<>]{1,80}",
+        // D. 归属对象：一路取到句读边界，杜绝残留孤立词片段，严格包含全角半角感叹号问号分号，防止贪婪吞噬后续规则
+        r"[^.,，。!?！？;；\r\n<>]{1,80}",
         // E. 紧随其后的句读，用于决定替换后的标点（`,` 续写 → 保留逗号）
-        r"([.,，。]?)"
+        r"([.,，。!?！？;；]?)"
     ))
     .unwrap()
 });
@@ -117,7 +121,7 @@ static RE_KNOWN_CLIENT_DECLARATION: Lazy<Regex> = Lazy::new(|| {
     Regex::new(concat!(
         r"(?i)\b(?:you\s+are|you're)\s+claude\s+code[\s,，]+(?:anthropic's\s+)?official\s+cli\s+for\s+claude",
         r"(?:[\s,，]+running\s+within\s+(?:the\s+)?claude\s+agent\s+sdk)?",
-        r"([.,，。]?)"
+        r"([.,，。!?！？;；]?)"
     ))
     .unwrap()
 });
@@ -199,12 +203,15 @@ impl PromptSanitizer {
         // 步骤 2：对非代码区域仅剥离触发 WAF 的高危伪 Header
         let pass1 = RE_WAF_TRIGGER_HEADERS.replace_all(&protected_text, "");
 
-        // 步骤 3：恢复受保护的代码块
-        let mut restored = pass1.into_owned();
-        for (idx, original_code) in placeholders.iter().enumerate() {
-            let ph = format!("__PROMPT_SANITIZER_CODE_BLOCK_{}__", idx);
-            restored = restored.replace(&ph, original_code);
-        }
+        // 步骤 3：单趟无递归还原受保护的代码块
+        let restored = RE_CODE_BLOCK_PLACEHOLDER.replace_all(&pass1, |caps: &regex::Captures| {
+            if let Ok(idx) = caps[1].parse::<usize>() {
+                if let Some(code) = placeholders.get(idx) {
+                    return code.clone();
+                }
+            }
+            caps[0].to_string()
+        });
 
         // 步骤 4：连续空行收拢（若因删除单行产生多余换行，保持正常双换行段落结构）
         let normalized = RE_MULTI_NEWLINE.replace_all(&restored, "\n\n");
@@ -290,12 +297,17 @@ impl PromptSanitizer {
 
         let normalized = pass2.into_owned();
 
-        // 步骤 3：还原受保护的代码块，并拼回头部窗口之后的原文
-        let mut restored = normalized;
-        for (idx, original_code) in placeholders.iter().enumerate() {
-            let ph = format!("__PROMPT_SANITIZER_CODE_BLOCK_{}__", idx);
-            restored = restored.replace(&ph, original_code);
-        }
+        // 步骤 3：单趟无递归还原受保护的代码块，并拼回头部窗口之后的原文
+        let mut restored = RE_CODE_BLOCK_PLACEHOLDER
+            .replace_all(&normalized, |caps: &regex::Captures| {
+                if let Ok(idx) = caps[1].parse::<usize>() {
+                    if let Some(code) = placeholders.get(idx) {
+                        return code.clone();
+                    }
+                }
+                caps[0].to_string()
+            })
+            .into_owned();
 
         restored.push_str(&text[head.len()..]);
         restored
@@ -1152,5 +1164,30 @@ mod tests {
             jeik
         );
         assert_eq!(payload["request"]["contents"][0]["parts"][0]["text"], jeik);
+    }
+
+    #[test]
+    fn test_code_block_with_placeholder_text_no_recursive_expansion() {
+        // [防御递归炸弹] 代码块中若本身包含占位符文本，单趟还原绝对不会被二次递归展开
+        let input = concat!(
+            "Some text before\n",
+            "```rust\n",
+            "let x = \"__PROMPT_SANITIZER_CODE_BLOCK_0__\";\n",
+            "```\n",
+            "Some text after"
+        );
+        let cleaned = PromptSanitizer::clean_text(input);
+        assert!(cleaned.contains("__PROMPT_SANITIZER_CODE_BLOCK_0__"));
+    }
+
+    #[test]
+    fn test_exclamation_mark_instruction_not_swallowed() {
+        // 感叹号或问号结束的身份声明，后续指令绝对不可被贪婪吞噬
+        let raw = concat!(
+            "You are an AI assistant created by Example Corp! ",
+            "Please always format all responses as valid JSON only."
+        );
+        let normalized = PromptSanitizer::normalize_system_identity(raw);
+        assert!(normalized.contains("Please always format all responses as valid JSON only."));
     }
 }

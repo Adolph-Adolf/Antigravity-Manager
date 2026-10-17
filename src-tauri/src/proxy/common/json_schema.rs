@@ -1,6 +1,5 @@
 use serde_json::{json, Value};
 
-const MAX_RECURSION_DEPTH: usize = 64;
 pub const MAX_CLEAN_RECURSION_DEPTH: usize = 64;
 pub const MAX_REF_RECURSION_DEPTH: usize = 64;
 pub const MAX_DESCRIPTION_LENGTH: usize = 8192;
@@ -48,7 +47,8 @@ pub fn clean_json_schema(value: &mut Value) {
     // [FIX #952] 始终运行 flatten_refs，即使 defs 为空
     // 这样可以捕获并处理无法解析的 $ref (降级为 string 类型)
     if let Value::Object(map) = value {
-        flatten_refs(map, &all_defs, 0);
+        let mut active_refs = std::collections::HashSet::new();
+        flatten_refs(map, &all_defs, 0, &mut active_refs);
     }
 
     // 递归清理
@@ -95,11 +95,12 @@ fn collect_all_defs(value: &Value, defs: &mut serde_json::Map<String, Value>) {
     }
 }
 
-/// 递归展开 $ref
+/// 递归展开 $ref，带有活跃祖先集合跟踪，防止循环/自引用导致指数级内存爆炸 (Fixes #3690)
 fn flatten_refs(
     map: &mut serde_json::Map<String, Value>,
     defs: &serde_json::Map<String, Value>,
     depth: usize,
+    active_refs: &mut std::collections::HashSet<String>,
 ) {
     if depth > MAX_REF_RECURSION_DEPTH {
         if map.contains_key("$ref") {
@@ -128,6 +129,30 @@ fn flatten_refs(
         // 解析引用名 (例如 #/$defs/MyType -> MyType)
         let ref_name = ref_path.split('/').last().unwrap_or(&ref_path);
 
+        // [FIX #3690] 循环引用检测：若当前引用已处于活跃展开祖先链路中，停止递归展开并降级为安全终结 Object，
+        // 杜绝分支因子 b >= 2 时产生 2^64 指数级膨胀导致 Linux VPS OOM (SIGKILL 137) 崩溃
+        if active_refs.contains(ref_name) {
+            tracing::warn!(
+                ref_name,
+                depth,
+                "[Schema-Flatten] Cyclic $ref detected, degrading to safe terminal object."
+            );
+            map.insert("type".to_string(), serde_json::json!("object"));
+            let hint = format!("(Cyclic $ref: {})", ref_path);
+            let desc_val = map
+                .entry("description".to_string())
+                .or_insert_with(|| Value::String(String::new()));
+            if let Value::String(s) = desc_val {
+                if !s.contains(&hint) {
+                    if !s.is_empty() {
+                        s.push(' ');
+                    }
+                    s.push_str(&hint);
+                }
+            }
+            return;
+        }
+
         if let Some(def_schema) = defs.get(ref_name) {
             // 将定义的内容合并到当前 map
             if let Value::Object(def_map) = def_schema {
@@ -137,9 +162,25 @@ fn flatten_refs(
                     map.entry(k.clone()).or_insert_with(|| v.clone());
                 }
 
-                // 递归处理刚刚合并进来的内容中可能包含的 $ref
-                // 注意：由于引入了 depth 限制，循环引用不再会导致栈溢出
-                flatten_refs(map, defs, depth + 1);
+                // 递归处理刚刚合并进来的内容：将当前类型压入活跃祖先集合
+                active_refs.insert(ref_name.to_string());
+                if map.contains_key("$ref") {
+                    flatten_refs(map, defs, depth + 1, active_refs);
+                } else {
+                    for (_, v) in map.iter_mut() {
+                        if let Value::Object(child_map) = v {
+                            flatten_refs(child_map, defs, depth + 1, active_refs);
+                        } else if let Value::Array(arr) = v {
+                            for item in arr {
+                                if let Value::Object(item_map) = item {
+                                    flatten_refs(item_map, defs, depth + 1, active_refs);
+                                }
+                            }
+                        }
+                    }
+                }
+                active_refs.remove(ref_name);
+                return;
             }
         } else {
             // [FIX #952] 无法解析的 $ref: 转换为宽松的 string 类型，避免 API 400 错误
@@ -157,17 +198,18 @@ fn flatten_refs(
                     s.push_str(&hint);
                 }
             }
+            return;
         }
     }
 
-    // 遍历子节点
+    // 遍历子节点 (仅当当前 map 原生未持有顶层 $ref 时执行，避免双重重复遍历)
     for (_, v) in map.iter_mut() {
         if let Value::Object(child_map) = v {
-            flatten_refs(child_map, defs, depth + 1);
+            flatten_refs(child_map, defs, depth + 1, active_refs);
         } else if let Value::Array(arr) = v {
             for item in arr {
                 if let Value::Object(item_map) = item {
-                    flatten_refs(item_map, defs, depth + 1);
+                    flatten_refs(item_map, defs, depth + 1, active_refs);
                 }
             }
         }
@@ -188,19 +230,30 @@ fn apply_minimal_failsafe(root: &mut Value) {
     while let Some(current) = stack.pop() {
         match current {
             Value::Object(map) => {
-                let is_array = map
-                    .get("type")
-                    .and_then(Value::as_str)
-                    .map(|t| t.eq_ignore_ascii_case("array"))
-                    .unwrap_or(false);
-                let is_object = map
-                    .get("type")
-                    .and_then(Value::as_str)
-                    .map(|t| t.eq_ignore_ascii_case("object"))
-                    .unwrap_or(false)
-                    || map.contains_key("properties");
+                let is_array = match map.get("type") {
+                    Some(Value::String(s)) => s.eq_ignore_ascii_case("array"),
+                    Some(Value::Array(arr)) => arr.iter().any(|v| {
+                        v.as_str()
+                            .map(|s| s.eq_ignore_ascii_case("array"))
+                            .unwrap_or(false)
+                    }),
+                    _ => false,
+                };
+                let is_object = if is_array {
+                    false
+                } else {
+                    map.get("type")
+                        .and_then(Value::as_str)
+                        .map(|t| t.eq_ignore_ascii_case("object"))
+                        .unwrap_or(false)
+                        || map.contains_key("properties")
+                };
 
                 if is_array {
+                    // [FIX #3682] 数组节点不可携带 properties（Gemini Protobuf 严格禁止 ARRAY 包含 properties）
+                    // 并且必须保障 items 存在，杜绝因包含 properties 误走 is_object 将 items 删除导致 400 INVALID_ARGUMENT
+                    map.insert("type".to_string(), Value::String("array".to_string()));
+                    map.remove("properties");
                     if let Some(items) = map.get("items") {
                         if !items.is_object() {
                             map.remove("items");
@@ -209,9 +262,7 @@ fn apply_minimal_failsafe(root: &mut Value) {
                     if !map.contains_key("items") {
                         map.insert("items".to_string(), json!({ "type": "string" }));
                     }
-                }
-
-                if is_object {
+                } else if is_object {
                     if !map.contains_key("type") {
                         map.insert("type".to_string(), Value::String("object".to_string()));
                     }
@@ -297,7 +348,16 @@ fn clean_json_schema_recursive(value: &mut Value, is_schema_node: bool, depth: u
             // 针对某些 MCP 工具（如 pencil）误用 items 定义对象属性的情况进行修复。
             // 如果 type=object 或包含 properties，但又定义了 items，Gemini 会因为 items 只能出现在 array 中而报错。
             // 我们将 items 的内容“对齐”到 properties 中。
-            if map.get("type").and_then(|t| t.as_str()) == Some("object")
+            // [FIX #3682] 注意：若节点显式为 array 类型，严禁误判为 Object 并偷走 items，而是应该移除其非法携带的 properties！
+            let is_explicit_array = map
+                .get("type")
+                .and_then(Value::as_str)
+                .map(|t| t.eq_ignore_ascii_case("array"))
+                .unwrap_or(false);
+
+            if is_explicit_array {
+                map.remove("properties");
+            } else if map.get("type").and_then(|t| t.as_str()) == Some("object")
                 || map.contains_key("properties")
             {
                 if let Some(items) = map.remove("items") {
@@ -391,11 +451,15 @@ fn clean_json_schema_recursive(value: &mut Value, is_schema_node: bool, depth: u
             // clients such as Claude Code may legitimately emit {"type":"array"}.
             // Use a string item schema as a Gemini-compatible fallback for these
             // otherwise unconstrained arrays.
-            let is_array = map
-                .get("type")
-                .and_then(Value::as_str)
-                .map(|t| t.eq_ignore_ascii_case("array"))
-                .unwrap_or(false);
+            let is_array = match map.get("type") {
+                Some(Value::String(s)) => s.eq_ignore_ascii_case("array"),
+                Some(Value::Array(arr)) => arr.iter().any(|v| {
+                    v.as_str()
+                        .map(|s| s.eq_ignore_ascii_case("array"))
+                        .unwrap_or(false)
+                }),
+                _ => false,
+            };
             if is_array && !map.contains_key("items") {
                 map.insert("items".to_string(), json!({ "type": "string" }));
             }
@@ -655,6 +719,17 @@ fn clean_json_schema_recursive(value: &mut Value, is_schema_node: bool, depth: u
                 }
                 if has_valid_enum {
                     map.insert("type".to_string(), Value::String("string".to_string()));
+                }
+
+                // 10. [FIX #3682] Gemini Protobuf 终态铁律守卫：所有终态为 ARRAY 的节点必须持有 items
+                // 无论前面经过了 anyOf 合并、type 联合解包还是属性清洗，杜绝任何无 items 裸数组透传导致 400 INVALID_ARGUMENT
+                let final_is_array = map
+                    .get("type")
+                    .and_then(Value::as_str)
+                    .map(|t| t.eq_ignore_ascii_case("array"))
+                    .unwrap_or(false);
+                if final_is_array && !map.contains_key("items") {
+                    map.insert("items".to_string(), json!({ "type": "string" }));
                 }
             }
         }
@@ -2017,5 +2092,104 @@ mod tests {
         }
         assert_eq!(curr["type"], "array");
         assert_eq!(curr["items"], json!({ "type": "string" }));
+    }
+
+    #[test]
+    fn test_issue_3690_cyclic_binary_tree_no_oom() {
+        // [FIX #3690] 模拟带有分支因子 b=2 的递归二叉树 Schema。
+        // 在修复前，未记录 active_refs 的 64 层递归会导致 2^64 指数级节点复制展开，数秒内耗尽 VPS 内存触发 OOM (SIGKILL 137)。
+        // 修复后，活跃祖先检测必须在发现循环引用后立即安全降级并终结递归，且耗时小于 5ms。
+        let mut schema = json!({
+            "$defs": {
+                "TreeNode": {
+                    "type": "object",
+                    "properties": {
+                        "value": { "type": "string" },
+                        "left": { "$ref": "#/$defs/TreeNode" },
+                        "right": { "$ref": "#/$defs/TreeNode" }
+                    }
+                }
+            },
+            "type": "object",
+            "properties": {
+                "root": { "$ref": "#/$defs/TreeNode" }
+            }
+        });
+
+        let start = std::time::Instant::now();
+        clean_json_schema(&mut schema);
+        let elapsed = start.elapsed();
+
+        assert!(
+            elapsed.as_millis() < 50,
+            "Recursive schema flattening took too long: {:?}",
+            elapsed
+        );
+
+        let root = &schema["properties"]["root"];
+        assert_eq!(root["type"], "object");
+        assert_eq!(root["properties"]["value"]["type"], "string");
+
+        // 验证子节点的循环引用已被平滑降级，且标记了 Cyclic $ref 提示
+        let left = &root["properties"]["left"];
+        assert_eq!(left["type"], "object");
+        assert!(
+            left["description"]
+                .as_str()
+                .unwrap_or("")
+                .contains("Cyclic $ref"),
+            "Left child should contain Cyclic $ref hint in description"
+        );
+
+        let right = &root["properties"]["right"];
+        assert_eq!(right["type"], "object");
+        assert!(
+            right["description"]
+                .as_str()
+                .unwrap_or("")
+                .contains("Cyclic $ref"),
+            "Right child should contain Cyclic $ref hint in description"
+        );
+    }
+
+    #[test]
+    fn test_issue_3682_array_with_properties_preserves_items_and_strips_properties() {
+        // [FIX #3682] 当节点同时携带 type: array 和 properties 时，
+        // Gemini Protobuf 约束：ARRAY 禁止包含 properties，且必须包含 items。
+        // 必须剥离 properties 并保留/补全 items，严禁误将 items 移除。
+        let mut schema = json!({
+            "type": "array",
+            "properties": {
+                "ignored_key": { "type": "string" }
+            },
+            "items": { "type": "number" }
+        });
+
+        clean_json_schema(&mut schema);
+
+        assert_eq!(schema["type"], "array");
+        assert!(
+            schema.get("properties").is_none(),
+            "properties must be stripped from array schema"
+        );
+        assert_eq!(schema["items"]["type"], "number");
+    }
+
+    #[test]
+    fn test_union_array_type_gets_items_fallback() {
+        // 验证带有联合类型的数组 (type: ["array", "null"]) 即使未显式声明 items，
+        // 也能在解包为 type: "array" 后正确兜底注入 items: { type: "string" }
+        let mut schema = json!({
+            "type": ["array", "null"]
+        });
+
+        clean_json_schema(&mut schema);
+
+        assert_eq!(schema["type"], "array");
+        assert_eq!(schema["items"], json!({ "type": "string" }));
+        assert!(schema["description"]
+            .as_str()
+            .unwrap_or("")
+            .contains("(nullable)"));
     }
 }
