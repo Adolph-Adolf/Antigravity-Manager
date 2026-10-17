@@ -46,9 +46,10 @@ static RE_CODE_BLOCK: Lazy<Regex> =
 static RE_WAF_TRIGGER_HEADERS: Lazy<Regex> = Lazy::new(|| {
     Regex::new(concat!(
         r"(?im)^\s*(?:x-[a-z0-9_-]*billing[a-z0-9_-]*|[a-z0-9_-]+-billing-(?:header|metadata|token|info)):\s*[^\r\n]*(\r?\n)?",
-        r"|^\s*x-[a-z0-9_-]+:\s*[^\r\n]*(?:cc_version|cc_entrypoint|cch=)[^\r\n]*(\r?\n)?",
+        r"|^\s*x-[a-z0-9_-]+:\s*[^\r\n]*(?:cc_version|cc_entrypoint|cc_workload|cc_is_subagent|cc_prev_req|cc_prompt_id|cc_turn_origin|cch=)[^\r\n]*(\r?\n)?",
         r"|(?i)x-anthropic-billing-header:\s*[^\r\n]*",
-        r"|(?i)You are a Claude agent, built on Anthropic's Claude Agent SDK\.(\r?\n)?"
+        r"|(?i)You are a Claude agent, built on Anthropic's Claude Agent SDK\.(\r?\n)?",
+        r"|(?i)You are Claude Code, Anthropic's official CLI for Claude, running within the Claude Agent SDK\.(\r?\n)?"
     ))
     .unwrap()
 });
@@ -114,7 +115,8 @@ static RE_IDENTITY_DECLARATION: Lazy<Regex> = Lazy::new(|| {
 /// 知名特定客户端开场白正则（如 Claude Code CLI 开场白，仅在系统提示词头部窗口内生效）
 static RE_KNOWN_CLIENT_DECLARATION: Lazy<Regex> = Lazy::new(|| {
     Regex::new(concat!(
-        r"(?i:\b(?:you\s+are|you're)\s+claude\s+code[\s,，]+(?:anthropic's\s+)?official\s+cli\s+for\s+claude)",
+        r"(?i)\b(?:you\s+are|you're)\s+claude\s+code[\s,，]+(?:anthropic's\s+)?official\s+cli\s+for\s+claude",
+        r"(?:[\s,，]+running\s+within\s+(?:the\s+)?claude\s+agent\s+sdk)?",
         r"([.,，。]?)"
     ))
     .unwrap()
@@ -145,6 +147,9 @@ const CLAUDE_AGENT_SDK_IDENTITY: &str =
     "You are a Claude agent, built on Anthropic's Claude Agent SDK.";
 /// 历史保留的 Claude Code CLI 身份声明（整串等值匹配）
 const CLAUDE_CODE_CLI_IDENTITY: &str = "You are Claude Code, Anthropic's official CLI for Claude.";
+/// Claude Code CLI 在 Claude Agent SDK 运行时注入的身份声明（整串等值匹配）
+const CLAUDE_AGENT_SDK_CLI_IDENTITY: &str =
+    "You are Claude Code, Anthropic's official CLI for Claude, running within the Claude Agent SDK.";
 
 /// Claude Desktop 注入的单行计费元数据前缀（issue #3452：与大量工具组合会触发上游 429）。
 /// 判定**不区分 model** —— 任何客户端注入的风险元数据都必须清洗。
@@ -171,6 +176,11 @@ impl PromptSanitizer {
         let has_suspect = lower.contains("billing")
             || lower.contains("cc_version")
             || lower.contains("cc_entrypoint")
+            || lower.contains("cc_workload")
+            || lower.contains("cc_is_subagent")
+            || lower.contains("cc_prev_req")
+            || lower.contains("cc_prompt_id")
+            || lower.contains("cc_turn_origin")
             || lower.contains("cch=")
             || lower.contains("claude agent sdk");
 
@@ -298,7 +308,10 @@ impl PromptSanitizer {
     /// 4. `system_scope` 决定是否叠加 System 轨（身份归一化）—— 仅系统提示词为 true。
     /// 客户端身份归一化：已知客户端身份（Claude Agent SDK / Claude Code CLI）对齐为官方 Antigravity 身份。
     pub fn normalize_client_identity(text: &str) -> &str {
-        if text == CLAUDE_AGENT_SDK_IDENTITY || text == CLAUDE_CODE_CLI_IDENTITY {
+        if text == CLAUDE_AGENT_SDK_IDENTITY
+            || text == CLAUDE_CODE_CLI_IDENTITY
+            || text == CLAUDE_AGENT_SDK_CLI_IDENTITY
+        {
             OFFICIAL_ANTIGRAVITY_IDENTITY
         } else {
             text
@@ -848,6 +861,64 @@ mod tests {
         let cleaned = PromptSanitizer::clean_text(raw);
         assert!(!cleaned.contains("Claude Agent SDK"));
         assert_eq!(cleaned, "You have access to a variety of tools.");
+    }
+
+    #[test]
+    fn test_clean_claude_agent_sdk_cli_identity() {
+        // [WAF 429 规避] 验证 Claude Code 在 Claude Agent SDK 运行时注入的第二类身份声明被精准剥离与归一化
+        let raw = concat!(
+            "You are Claude Code, Anthropic's official CLI for Claude, running within the Claude Agent SDK.\n\n",
+            "You have access to a variety of tools."
+        );
+        let cleaned = PromptSanitizer::clean_text(raw);
+        assert!(!cleaned.contains("Claude Agent SDK"));
+        assert!(!cleaned.contains("Claude Code"));
+        assert_eq!(cleaned, "You have access to a variety of tools.");
+
+        // System 轨头部窗口归一化为官方 Antigravity 助手
+        let normalized = PromptSanitizer::normalize_system_identity(raw);
+        eprintln!("DEBUG normalized = {:?}", normalized);
+        assert!(normalized.starts_with(OFFICIAL_ANTIGRAVITY_IDENTITY));
+        assert!(normalized.contains("You have access to a variety of tools."));
+        assert!(!normalized.contains("running within the Claude Agent SDK"));
+
+        // 客户端整串等值归一化映射
+        let sdk_cli_identity = "You are Claude Code, Anthropic's official CLI for Claude, running within the Claude Agent SDK.";
+        assert_eq!(
+            PromptSanitizer::normalize_client_identity(sdk_cli_identity),
+            OFFICIAL_ANTIGRAVITY_IDENTITY
+        );
+    }
+
+    #[test]
+    fn test_clean_waf_trigger_cc_extended_attribution_headers() {
+        // [Claude Code 2.1.301] 扩展归属元数据字段 (cc_workload, cc_is_subagent, cc_prev_req, cc_prompt_id, cc_turn_origin 等)
+        let raw1 = concat!(
+            "x-anthropic-billing-header: cc_workload=interactive; cc_is_subagent=true;\n",
+            "Actual user instructions."
+        );
+        assert_eq!(
+            PromptSanitizer::clean_text(raw1),
+            "Actual user instructions."
+        );
+
+        let raw2 = concat!(
+            "x-client-metadata: cc_workload=interactive; cc_is_subagent=true;\n",
+            "Actual user instructions."
+        );
+        assert_eq!(
+            PromptSanitizer::clean_text(raw2),
+            "Actual user instructions."
+        );
+
+        let raw3 = concat!(
+            "x-anthropic-billing-header: cc_prev_req=req_0194e4; cc_prompt_id=e7b4478f; cc_turn_origin=auto;\n",
+            "Actual user instructions."
+        );
+        assert_eq!(
+            PromptSanitizer::clean_text(raw3),
+            "Actual user instructions."
+        );
     }
 
     #[test]
