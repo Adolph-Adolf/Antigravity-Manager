@@ -1202,10 +1202,7 @@ mod tests {
     fn test_v1_internal_fallbacks_order_prioritizes_daily_over_sandbox() {
         assert_eq!(
             V1_INTERNAL_BASE_URL_FALLBACKS,
-            [
-                V1_INTERNAL_BASE_URL_DAILY,
-                V1_INTERNAL_BASE_URL_SANDBOX,
-            ]
+            [V1_INTERNAL_BASE_URL_DAILY, V1_INTERNAL_BASE_URL_SANDBOX,]
         );
     }
 
