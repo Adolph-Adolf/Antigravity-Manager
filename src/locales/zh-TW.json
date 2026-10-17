@@ -355,13 +355,9 @@
                 "batch_fail": "匯入失敗"
             },
             "import": {
-                "scheme_a": "方案 A: 從當前 IDE 資料庫",
-                "scheme_a_desc": "自動從本地 Antigravity 資料庫讀取當前登入的帳號資訊。",
-                "btn_db": "匯入當前登入帳號",
-                "or": "或者",
-                "scheme_b": "方案 B: 從 V1 版本備份",
-                "scheme_b_desc": "掃描 ~/.antigravity-agent 目錄，批次匯入舊版本的帳號資料。",
-                "btn_v1": "從 V1 備份批次匯入",
+                "scheme_a": "自動掃描本地已登入帳號",
+                "scheme_a_desc": "自動對本地系統 Keyring/Keychain、Antigravity IDE、經典款及 CLI 進行全量掃描並批次匯入已登入帳號。",
+                "btn_db": "一鍵掃描並匯入所有本地帳號",
                 "btn_custom_db": "從自定義 DB 匯入"
             },
             "btn_cancel": "取消",

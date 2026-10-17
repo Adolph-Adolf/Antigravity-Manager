@@ -406,13 +406,9 @@
                 "batch_fail": "Import failed"
             },
             "import": {
-                "scheme_a": "Plan A: From IDE DB",
-                "scheme_a_desc": "Auto-read current logged-in account from local Antigravity DB.",
-                "btn_db": "Import Current Account",
-                "or": "OR",
-                "scheme_b": "Plan B: From V1 Backup",
-                "scheme_b_desc": "Scan ~/.antigravity-agent for V1 account data.",
-                "btn_v1": "Batch Import V1",
+                "scheme_a": "Auto-Scan Local Accounts",
+                "scheme_a_desc": "Scan local Keyring/Keychain, Antigravity IDE, Classic, and CLI credentials to import all logged-in accounts.",
+                "btn_db": "Scan & Import All Local Accounts",
                 "btn_custom_db": "Import Custom DB"
             },
             "btn_cancel": "Cancel",

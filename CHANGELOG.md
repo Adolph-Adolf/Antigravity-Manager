@@ -8,6 +8,10 @@
             -   **403 报文体全量捕获与动作链接提取 (validation_url / appeal_url)**: 在配额探测模块（`modules/quota.rs`）中根除 403 立即丢弃响应体的缺陷；全量读取 Google RPC 错误详情报文，通过新增的 `extract_action_url` 精准解析 `details.metadata` 中的 `validation_url`（人机/安全验证链接）与 `appeal_url`（服务条款申诉链接）并持久化至账号模型。配合前端 `AccountErrorDialog`，即时点亮「点击去验证」、「复制验证链接」或「前往申诉」交互按钮，彻底告别空洞抽象的单一 403 报错状态。
             -   **临时人机验证 (VALIDATION_REQUIRED) 与永久封禁严格解耦**: 在 Gemini、Claude 与 OpenAI 协议网关（`handlers/gemini.rs`、`handlers/claude.rs`、`handlers/openai.rs`）及预热检测中，将临时人机验证与永久封禁（`set_forbidden`）改造为严格互斥逻辑。发生 `VALIDATION_REQUIRED` 时仅进入 10 分钟观察窗口并记录验证链接，不再强行写入永久 `proxy_disabled = true`，杜绝临时验证被误判为永久死刑。
             -   **配额探测成功自动解除死锁与闭环自愈**: 彻底重塑 `update_account_quota` 与 `clear_validation_blocked`，当账号在外部（如官方 IDE 或网页端）通过验证、配额探测恢复正常（`is_forbidden == false`）时，自动解除 `proxy_disabled` 禁用状态并清空历史 403 错误信息；同时触发 `trigger_account_reload` 与前端状态推送，使恢复的账号无需人工干预即可全自动重归现役代理号池。
+        -   **[本地账号扫描全链路对齐与旧版备份移除]**:
+            -   **精简移除旧版 V1 备份与界面轻量化**: 在新增账号弹窗中彻底移除早期 V1 版本（`~/.antigravity-agent`）冗余导入入口与分割线，将界面聚焦并精简为「自动扫描本地已登录账号」与「从自定义 DB 导入」，同步优化多语言文案与布局空间。
+            -   **经典款与 IDE 款数据库候选全量聚合 (state.vscdb)**: 新增 `db::get_all_antigravity_db_paths()`，破除先前导入扫描仅检索经典款 `Antigravity` 的限制；支持无缝并发聚合经典款与 Antigravity IDE（含 `antigravity-ide` 变体）所有活动数据库实例，彻底解决 IDE 款已登录账号被静默漏检的问题。
+            -   **Antigravity CLI (agy) 原生凭据独立并发探测**: 新增 `read_antigravity_cli_credentials()`，解决系统 Keyring 短路拦截导致无法检索 CLI 令牌的缺陷；独立扫描 Antigravity CLI 原生凭据与备份文件（`~/.gemini/antigravity-cli/antigravity-oauth-token*`），严格限定仅处理 Antigravity 生态凭据，实现多源账号自动去重全量入池。
 
     *   **v4.9.8-beta.8 (2026-10-17)**:
         -   **[对齐 Claude Code 2.1.301 协议规范、全链路请求追溯与 Claude 5 模型族] (PR #3689, Ref #3684, Ref #3686, Thanks to @cubelikeplayDaniel)**:
