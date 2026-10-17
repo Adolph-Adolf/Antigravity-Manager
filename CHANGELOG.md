@@ -3,6 +3,21 @@
 > 完整版本历史记录。返回项目主页请查看 [README_ZH.md](README_ZH.md) | [English Changelog](CHANGELOG_EN.md)。
 
 *   **版本演进**:
+    *   **v4.9.8-beta.10 (2026-10-17)**:
+        -   **[JSON Schema 递归展开防 OOM 崩溃与数组规范化] (PR #3694, Fixes #3690, Ref #3682, Thanks to @cubelikeplayDaniel)**:
+            -   **循环自引用展开阻断与安全降级**: 针对包含分支因子 $b \ge 2$ 的递归数据结构（如二叉树 `left: $ref, right: $ref`），在展开路径中引入活跃引用集合 `active_refs`；一旦检测到循环引用立即安全降级为带有 `"(Cyclic $ref: ...)"` 提示的终态空对象并中止展开，彻底阻断 $2^{64}$ 指数级节点裂变爆炸，杜绝 Linux VPS/服务器遭遇物理内存耗尽触发 OOM (SIGKILL 137) 崩溃。(PR #3694, Fixes #3690, Thanks to @cubelikeplayDaniel)
+            -   **工具 Schema 规范化与终态 ARRAY 守卫**: 修正具备 `properties` 与 `type: "array"` 的工具 Schema 规范化逻辑，安全剥离非法的 `properties` 并保底注入合规 `items`；增加终态铁律守卫，确保所有最终为 ARRAY 的节点必持合规 `items`，防止联合数组类型触发 Gemini Protobuf 400 INVALID_ARGUMENT 校验拦截。(PR #3694, Ref #3682, Thanks to @cubelikeplayDaniel)
+        -   **[推理模型自适应流式预读 Peek 宽限与首包防误杀] (PR #3694, Ref #3693, Thanks to @cubelikeplayDaniel)**:
+            -   **思考与推理模型自适应预读阶梯放宽**: 针对 Claude 与 OpenAI 协议端点中思考/推理模型（`thinkingConfig`、`reasoning_effort`、`o1/o3/o4` 系列及其思考变体），实现 `calculate_adaptive_peek_timeout_full`；将流式首包预读超时底线从 30 秒自适应阶梯扩展至 60 秒（大上下文根据 Token 估算自动扩展至 90 秒 / 120 秒），彻底解决长前缀思考预热与高推理深度导致的 30 秒超时误杀与全池轮换重试雪崩。(PR #3694, Ref #3693, Thanks to @cubelikeplayDaniel)
+        -   **[账号池零停机原子同步加载与并发闪断消除] (PR #3694, Thanks to @cubelikeplayDaniel)**:
+            -   **零停机平滑无损重载**: 消除 `load_accounts` 期间预先全量清空全局 `self.tokens` 容器导致的并发请求遭遇 `503 Token pool is empty` 闪断故障；重构为局部暂存集合异步载入，再通过 `retain` 安全剔除已失效账号并原子覆写新增/有效账号，确保账号池在高并发热重载过程中全程 100% 在线。(PR #3694, Thanks to @cubelikeplayDaniel)
+        -   **[限流防倒退校验与 ErrorInfo 顺序无关解析] (PR #3694, Thanks to @cubelikeplayDaniel)**:
+            -   **限流防倒退保护**: 在 `parse_from_error_with_mode` 中增加防倒退校验，当账号已处于更长且未过期的锁定状态（如配额耗尽 300 秒退避）时，自动忽略后续并发请求返回的无具体延时的较短通用 429 间隔（60 秒），防止长锁定被瞬态短报错冲刷倒退。(PR #3694, Thanks to @cubelikeplayDaniel)
+            -   **多错误明细顺序无关扫描**: 遍历扫描 `details` 数组中的所有对象寻找 `reason`，杜绝因 `google.rpc.ErrorInfo` 位于非零索引（如第 0 项为 `google.rpc.Help`）引发的限流原因漏判。(PR #3694, Thanks to @cubelikeplayDaniel)
+        -   **[鉴权安全加固与 Prompt 代码块防递归展开] (PR #3694, Thanks to @cubelikeplayDaniel)**:
+            -   **OAuth 鉴权头敏感标记防护**: 向 Google 上游发送请求的 HeaderMap 中的 `Authorization` HeaderValue 显式标记为 `sensitive`，确保在所有日志追踪与 Debug 打印中自动脱敏为 `[sensitive]`，杜绝 Bearer Token 明文泄漏。(PR #3694, Thanks to @cubelikeplayDaniel)
+            -   **Prompt Sanitizer 单次正则替换与边界截断**: 将受保护代码块占位符的多轮循环串行替换升级为基于正则的单次原子还原，杜绝代码块内若包含占位符 token 导致的二次展开与字符串膨胀风险；并在身份标识正文中补充 `! ? ; ！ ？ ；` 等标点边界，防止贪婪匹配吞噬紧随其后的开发者指令。(PR #3694, Thanks to @cubelikeplayDaniel)
+
     *   **v4.9.8-beta.9 (2026-10-17)**:
         -   **[剔除不可用 Prod 端点并放宽流式首包看门狗超时至 120s] (PR #3691, Fixes #3506, Ref #3525, Thanks to @EricZhou05)**:
             -   **剔除 100% 报 429 的 Prod 生产公共端点**: 经全规模对照实测，Prod 生产端点（`cloudcode-pa.googleapis.com`）对该接口全上下文规模均在 1 秒左右必然返回 `429 RESOURCE_EXHAUSTED`，无法作为有效 fallback，切过去只会引发假阳性限流并触发账号禁用死循环。在 `V1_INTERNAL_BASE_URL_FALLBACKS` 中彻底剔除 Prod 端点，仅保留官方原生主力 `Daily` 与实测可用的备用 `Sandbox` 双端点容灾，切断流向必死 Prod 的自杀通道。(PR #3691, Ref #3525, Thanks to @EricZhou05)
@@ -13,8 +28,8 @@
             -   **403 报文体全量捕获与动作链接提取 (validation_url / appeal_url)**: 在配额探测模块（`modules/quota.rs`）中根除 403 立即丢弃响应体的缺陷；全量读取 Google RPC 错误详情报文，通过新增的 `extract_action_url` 精准解析 `details.metadata` 中的 `validation_url`（人机/安全验证链接）与 `appeal_url`（服务条款申诉链接）并持久化至账号模型。配合前端 `AccountErrorDialog`，即时点亮「点击去验证」、「复制验证链接」或「前往申诉」交互按钮，彻底告别空洞抽象的单一 403 报错状态。
             -   **临时人机验证 (VALIDATION_REQUIRED) 与永久封禁严格解耦**: 在 Gemini、Claude 与 OpenAI 协议网关（`handlers/gemini.rs`、`handlers/claude.rs`、`handlers/openai.rs`）及预热检测中，将临时人机验证与永久封禁（`set_forbidden`）改造为严格互斥逻辑。发生 `VALIDATION_REQUIRED` 时仅进入 10 分钟观察窗口并记录验证链接，不再强行写入永久 `proxy_disabled = true`，杜绝临时验证被误判为永久死刑。
             -   **配额探测成功自动解除死锁与闭环自愈**: 彻底重塑 `update_account_quota` 与 `clear_validation_blocked`，当账号在外部（如官方 IDE 或网页端）通过验证、配额探测恢复正常（`is_forbidden == false`）时，自动解除 `proxy_disabled` 禁用状态并清空历史 403 错误信息；同时触发 `trigger_account_reload` 与前端状态推送，使恢复的账号无需人工干预即可全自动重归现役代理号池。
-        -   **[经典款配额自动无感热切换、双核算力池监控与冗余同步清理] (Ref #3509)**:
-            -   **经典款配额耗尽/低于阈值全自动无感热切**: 在后台配额巡检流水线（`refresh_all_quotas_internal`）中接入自动热切引擎；当检测到 Antigravity 经典款当前正在运行且活动账号配额低于预设阈值时，自动在账号池中按「满足阈值门槛 + 付费等级优先 (Pro/Ultra > Free) + 可用配额更多 + LRU 防震荡」挑选最佳可用账号。通过精准终止后台 `language_server` 子进程并自动更新系统 Keyring，由内置 supervisor 在 2 秒内原地无感重启生效，并附带 120 秒冷却锁与系统桌面通知。 (Ref #3509)
+        -   **[经典款独占配额自动无感热切换、双核算力池监控与冗余同步清理] (Ref #3509)**:
+            -   **经典款配额耗尽/低于阈值全自动无感热切 (仅限原生经典版，IDE 与 CLI 暂不支持)**: 在后台配额巡检流水线（`refresh_all_quotas_internal`）中接入自动热切引擎；当检测到 Antigravity 经典款当前正在运行且活动账号配额低于预设阈值时，自动在账号池中按「满足阈值门槛 + 付费等级优先 (Pro/Ultra > Free) + 可用配额更多 + LRU 防震荡」挑选最佳可用账号。由于仅原生经典版（Standalone）具备终止 `language_server` 子进程后原地由内置 supervisor 重新拉起并继承 Keyring 凭据的特性，本机制为经典款独占（Antigravity IDE 与 CLI 由于官方客户端架构限制，暂不支持无感热切）。热切换全程在 2 秒内无感完成，并附带 120 秒冷却锁与系统桌面通知。 (Ref #3509)
             -   **极简双核算力池监控与阈值调节**: 彻底告别繁复密集的细分子模型标签，与仪表盘配额体系深度对齐，提供「Gemini 算力池 (Pro / Flash / 绘图)」与「第三方模型池 (Claude 3.7 / 3.5 / GPT)」两大核心池多选卡片；支持用户自定义 0% ~ 99% 换号触发阈值。
             -   **清理冗余的账号同步轮询与界面精简**: 彻底移除设置页中容易引起与“自动刷新配额”混淆的历史老旧功能「自动获取当前账号」配置卡片，同步清理前端无效定时器，保持账号设置页聚焦整洁。
             -   **全量 12 种多国语言覆盖**: 经典款自动热切相关文案完整覆盖中文（简/繁）、英文、韩文、日文、俄文、西文、葡文、土文、越文、阿文、马文等全部 12 种语言。
