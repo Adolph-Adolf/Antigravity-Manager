@@ -1254,6 +1254,9 @@ fn rebuild_index_from_accounts_in_dir(data_dir: &PathBuf) -> Result<AccountIndex
         accounts: summaries,
         current_account_id,
         current_target_ide: None,
+        current_classic_account_id: None,
+        current_ide_account_id: None,
+        current_agy_account_id: None,
     })
 }
 
@@ -2234,7 +2237,119 @@ pub fn set_current_account_id_with_target(
     let mut index = load_account_index()?;
     index.current_account_id = Some(account_id.to_string());
     index.current_target_ide = target_ide.map(|s| s.to_string());
+    match target_ide {
+        Some("classic") => index.current_classic_account_id = Some(account_id.to_string()),
+        Some("ide") => index.current_ide_account_id = Some(account_id.to_string()),
+        Some("agy") => index.current_agy_account_id = Some(account_id.to_string()),
+        _ => {
+            index.current_classic_account_id = Some(account_id.to_string());
+        }
+    }
     save_account_index(&index)
+}
+
+/// 智能探查并获取经典款、Antigravity IDE、Antigravity CLI 三大客户端当前各自生效的账号状态
+pub fn detect_active_clients_status() -> Result<crate::models::ActiveClientsStatus, String> {
+    let index = load_account_index()?;
+    let mut status = crate::models::ActiveClientsStatus {
+        classic_account_id: index.current_classic_account_id.clone(),
+        classic_email: None,
+        ide_account_id: index.current_ide_account_id.clone(),
+        ide_email: None,
+        agy_account_id: index.current_agy_account_id.clone(),
+        agy_email: None,
+    };
+
+    let accounts = list_accounts().unwrap_or_default();
+    let find_by_rt = |rt: &str| -> Option<Account> {
+        accounts.iter().find(|a| a.token.refresh_token == rt).cloned()
+    };
+    let find_by_id = |id: &str| -> Option<Account> {
+        accounts.iter().find(|a| a.id == id).cloned()
+    };
+
+    // 1. 探测 IDE 款当前账号 (state.vscdb)
+    if let Ok(db_path) = crate::modules::db::get_db_path(Some("ide")) {
+        if db_path.exists() {
+            if let Ok(oauth_state) = crate::modules::migration::extract_oauth_state_from_file(&db_path) {
+                if let Some(acc) = find_by_rt(&oauth_state.refresh_token) {
+                    status.ide_account_id = Some(acc.id.clone());
+                    status.ide_email = Some(acc.email);
+                }
+            }
+        }
+    }
+    if status.ide_email.is_none() {
+        if let Some(ref id) = status.ide_account_id {
+            if let Some(acc) = find_by_id(id) {
+                status.ide_email = Some(acc.email);
+            }
+        }
+    }
+
+    // 2. 探测 CLI (agy) 当前账号
+    let cli_states = crate::modules::integration::read_antigravity_cli_credentials();
+    if let Some(first_cli) = cli_states.first() {
+        if let Some(acc) = find_by_rt(&first_cli.refresh_token) {
+            status.agy_account_id = Some(acc.id.clone());
+            status.agy_email = Some(acc.email);
+        }
+    }
+    if status.agy_email.is_none() {
+        if let Ok(keyring_state) = crate::modules::integration::read_from_system_keyring_only() {
+            if let Some(acc) = find_by_rt(&keyring_state.refresh_token) {
+                status.agy_account_id = Some(acc.id.clone());
+                status.agy_email = Some(acc.email);
+            }
+        }
+    }
+    if status.agy_email.is_none() {
+        if let Some(ref id) = status.agy_account_id {
+            if let Some(acc) = find_by_id(id) {
+                status.agy_email = Some(acc.email);
+            }
+        }
+    }
+
+    // 3. 探测经典款当前账号 (Keyring 优先，其次经典款 DB)
+    if let Ok(keyring_state) = crate::modules::integration::read_from_system_keyring_only() {
+        if let Some(acc) = find_by_rt(&keyring_state.refresh_token) {
+            status.classic_account_id = Some(acc.id.clone());
+            status.classic_email = Some(acc.email);
+        }
+    }
+    if status.classic_email.is_none() {
+        if let Ok(db_path) = crate::modules::db::get_db_path(Some("classic")) {
+            if db_path.exists() {
+                if let Ok(oauth_state) = crate::modules::migration::extract_oauth_state_from_file(&db_path) {
+                    if let Some(acc) = find_by_rt(&oauth_state.refresh_token) {
+                        status.classic_account_id = Some(acc.id.clone());
+                        status.classic_email = Some(acc.email);
+                    }
+                }
+            }
+        }
+    }
+    if status.classic_email.is_none() {
+        if let Some(ref id) = status.classic_account_id {
+            if let Some(acc) = find_by_id(id) {
+                status.classic_email = Some(acc.email);
+            }
+        }
+    }
+
+    // Fallback if index has current_account_id and current_target_ide
+    if status.classic_account_id.is_none() && status.ide_account_id.is_none() && status.agy_account_id.is_none() {
+        if let Some(ref curr_id) = index.current_account_id {
+            match index.current_target_ide.as_deref() {
+                Some("ide") => status.ide_account_id = Some(curr_id.clone()),
+                Some("agy") => status.agy_account_id = Some(curr_id.clone()),
+                _ => status.classic_account_id = Some(curr_id.clone()),
+            }
+        }
+    }
+
+    Ok(status)
 }
 
 /// Update account quota

@@ -450,7 +450,7 @@ fn extract_enterprise_project_id_from_conn(
     }
 }
 
-fn extract_oauth_state_from_file(db_path: &PathBuf) -> Result<ImportedOAuthState, String> {
+pub fn extract_oauth_state_from_file(db_path: &PathBuf) -> Result<ImportedOAuthState, String> {
     use base64::{engine::general_purpose, Engine as _};
 
     if !db_path.exists() {

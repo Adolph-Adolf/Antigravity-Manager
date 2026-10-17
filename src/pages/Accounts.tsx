@@ -41,6 +41,7 @@ function Accounts() {
   const {
     accounts,
     currentAccount,
+    activeClients,
     fetchAccounts,
     fetchCurrentAccount,
     addAccount,
@@ -1035,6 +1036,7 @@ function Accounts() {
                 onToggleSelect={handleToggleSelect}
                 onToggleAll={handleToggleAll}
                 currentAccountId={currentAccount?.id || null}
+                activeClients={activeClients}
                 switchingAccountId={switchingAccountId}
                 onSwitch={handleSwitch}
                 onRefresh={handleRefresh}
@@ -1063,6 +1065,7 @@ function Accounts() {
               refreshingIds={refreshingIds}
               onToggleSelect={handleToggleSelect}
               currentAccountId={currentAccount?.id || null}
+              activeClients={activeClients}
               switchingAccountId={switchingAccountId}
               onSwitch={handleSwitch}
               onRefresh={handleRefresh}

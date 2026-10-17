@@ -12,6 +12,11 @@
             -   **精简移除旧版 V1 备份与界面轻量化**: 在新增账号弹窗中彻底移除早期 V1 版本（`~/.antigravity-agent`）冗余导入入口与分割线，将界面聚焦并精简为「自动扫描本地已登录账号」与「从自定义 DB 导入」，同步优化多语言文案与布局空间。
             -   **经典款与 IDE 款数据库候选全量聚合 (state.vscdb)**: 新增 `db::get_all_antigravity_db_paths()`，破除先前导入扫描仅检索经典款 `Antigravity` 的限制；支持无缝并发聚合经典款与 Antigravity IDE（含 `antigravity-ide` 变体）所有活动数据库实例，彻底解决 IDE 款已登录账号被静默漏检的问题。
             -   **Antigravity CLI (agy) 原生凭据独立并发探测**: 新增 `read_antigravity_cli_credentials()`，解决系统 Keyring 短路拦截导致无法检索 CLI 令牌的缺陷；独立扫描 Antigravity CLI 原生凭据与备份文件（`~/.gemini/antigravity-cli/antigravity-oauth-token*`），严格限定仅处理 Antigravity 生态凭据，实现多源账号自动去重全量入池。
+        -   **[经典款、IDE 款与 CLI (agy) 三端当前账号独立追踪与情境化多端徽章] (Ref #3630, Ref #3686)**:
+            -   **三端活动账号独立探测与事实对齐**: 新增 `detect_active_clients_status` 与 `get_active_clients_status` Tauri 命令，分别精准探查 Antigravity 经典款（Keychain / DB）、Antigravity IDE (`state.vscdb`) 以及 Antigravity CLI (`agy` 原生凭据与 Keyring) 三端真实的当前生效账号；告别以往单全局 `current_account_id` 互相覆盖、状态混乱与归属不明的问题。
+            -   **持久化索引结构与多端切换记忆**: 在 `AccountIndex` 中扩展 `current_classic_account_id`、`current_ide_account_id` 与 `current_agy_account_id` 字段；在针对特定目标端（Classic / IDE / CLI）切换生效账号时，精准更新对应端的活动账号记录并持久化索引。
+            -   **情境化多端徽章呈现与列表聚焦**: 在卡片视图（`AccountCard`）与表格视图（`AccountTable`）中引入专属情境化徽章（`[经典款]`、`[IDE]`、`[CLI]`）；支持同一账号被多端同时登录时直观复合展示，并对任一活动端账号赋予专属高亮边框与行背景，大幅提升多环境并行开发时的辨识度与体验。
+            -   **全量多语言国际化支持**: 覆盖简体中文、繁体中文、英文客户端徽章文案与悬浮提示说明。
 
     *   **v4.9.8-beta.8 (2026-10-17)**:
         -   **[对齐 Claude Code 2.1.301 协议规范、全链路请求追溯与 Claude 5 模型族] (PR #3689, Ref #3684, Ref #3686, Thanks to @cubelikeplayDaniel)**:

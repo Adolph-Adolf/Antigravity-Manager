@@ -192,6 +192,14 @@ pub async fn get_current_account() -> Result<Option<Account>, String> {
     }
 }
 
+/// 获取经典款、Antigravity IDE、Antigravity CLI 三大客户端独立生效的当前账号状态
+#[tauri::command]
+pub async fn get_active_clients_status() -> Result<crate::models::ActiveClientsStatus, String> {
+    tokio::task::spawn_blocking(modules::account::detect_active_clients_status)
+        .await
+        .unwrap_or_else(|_| Err("Task panicked".to_string()))
+}
+
 /// 导出账号（包含 refresh_token）
 use crate::models::AccountExportResponse;
 

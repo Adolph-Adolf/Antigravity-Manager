@@ -48,7 +48,7 @@ import {
     ArrowUp,
     ArrowDown,
 } from 'lucide-react';
-import { type Account, getAccountTier } from '../../types/account';
+import { type Account, type ActiveClientsStatus, getAccountTier } from '../../types/account';
 import { useTranslation } from 'react-i18next';
 import { cn } from '../../utils/cn';
 
@@ -69,6 +69,7 @@ interface AccountTableProps {
     onToggleSelect: (id: string) => void;
     onToggleAll: () => void;
     currentAccountId: string | null;
+    activeClients?: ActiveClientsStatus;
     switchingAccountId: string | null;
     onSwitch: (accountId: string, targetIde?: string) => void;
     onRefresh: (accountId: string) => void;
@@ -89,6 +90,7 @@ interface SortableRowProps {
     selected: boolean;
     isRefreshing: boolean;
     isCurrent: boolean;
+    activeClients?: ActiveClientsStatus;
     isSwitching: boolean;
     isDragging?: boolean;
     onSelect: () => void;
@@ -108,6 +110,7 @@ interface SortableRowProps {
 interface AccountRowContentProps {
     account: Account;
     isCurrent: boolean;
+    activeClients?: ActiveClientsStatus;
     isRefreshing: boolean;
     isSwitching: boolean;
     isDisabled: boolean;
@@ -185,6 +188,7 @@ function SortableAccountRow({
     selected,
     isRefreshing,
     isCurrent,
+    activeClients,
     isSwitching,
     isDragging,
     onSelect,
@@ -217,13 +221,18 @@ function SortableAccountRow({
         zIndex: isSortableDragging ? 1000 : 'auto',
     };
 
+    const isClassic = activeClients?.classic_account_id === account.id;
+    const isIde = activeClients?.ide_account_id === account.id;
+    const isAgy = activeClients?.agy_account_id === account.id;
+    const isRowCurrent = isCurrent || isClassic || isIde || isAgy;
+
     return (
         <tr
             ref={setNodeRef}
             style={style as React.CSSProperties}
             className={cn(
                 "group transition-colors border-b border-gray-100 dark:border-base-200",
-                isCurrent && "bg-blue-50/50 dark:bg-blue-900/10",
+                isRowCurrent && "bg-blue-50/50 dark:bg-blue-900/10",
                 isDragging && "bg-blue-100 dark:bg-blue-900/30 shadow-lg",
                 !isDragging && "hover:bg-gray-50 dark:hover:bg-base-200"
             )}
@@ -257,6 +266,7 @@ function SortableAccountRow({
             <AccountRowContent
                 account={account}
                 isCurrent={isCurrent}
+                activeClients={activeClients}
                 isRefreshing={isRefreshing}
                 isSwitching={isSwitching}
                 isDisabled={Boolean(account.disabled)}
@@ -282,6 +292,7 @@ function SortableAccountRow({
 function AccountRowContent({
     account,
     isCurrent,
+    activeClients,
     isRefreshing,
     isSwitching,
     isDisabled,
@@ -303,6 +314,11 @@ function AccountRowContent({
     // 自定义标签编辑状态
     const [isEditingLabel, setIsEditingLabel] = useState(false);
     const [labelInput, setLabelInput] = useState(account.custom_label || '');
+
+    const isClassic = activeClients?.classic_account_id === account.id;
+    const isIde = activeClients?.ide_account_id === account.id;
+    const isAgy = activeClients?.agy_account_id === account.id;
+    const isRowActive = isCurrent || isClassic || isIde || isAgy;
 
     const handleSaveLabel = () => {
         if (onUpdateLabel) {
@@ -336,13 +352,37 @@ function AccountRowContent({
                 <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
                     <span className={cn(
                         "font-medium text-sm break-all transition-colors",
-                        isCurrent ? "text-blue-700 dark:text-blue-400" : "text-gray-900 dark:text-base-content"
+                        isRowActive ? "text-blue-700 dark:text-blue-400" : "text-gray-900 dark:text-base-content"
                     )} title={account.email}>
                         {account.email}
                     </span>
 
                     <div className="flex items-center gap-1.5 shrink-0">
-                        {isCurrent && (
+                        {isClassic && (
+                            <span
+                                className="px-2 py-0.5 rounded-md bg-blue-100 dark:bg-blue-900/50 text-blue-700 dark:text-blue-300 text-[10px] font-bold shadow-sm border border-blue-200/50 dark:border-blue-800/50"
+                                title={t('accounts.client_classic_tooltip', '当前 Antigravity 经典款客户端登录账号')}
+                            >
+                                {t('accounts.client_classic', '经典款')}
+                            </span>
+                        )}
+                        {isIde && (
+                            <span
+                                className="px-2 py-0.5 rounded-md bg-sky-100 dark:bg-sky-900/50 text-sky-700 dark:text-sky-300 text-[10px] font-bold shadow-sm border border-sky-200/50 dark:border-sky-800/50"
+                                title={t('accounts.client_ide_tooltip', '当前 Antigravity IDE 客户端登录账号')}
+                            >
+                                {t('accounts.client_ide', 'IDE')}
+                            </span>
+                        )}
+                        {isAgy && (
+                            <span
+                                className="px-2 py-0.5 rounded-md bg-emerald-100 dark:bg-emerald-900/50 text-emerald-700 dark:text-emerald-300 text-[10px] font-bold shadow-sm border border-emerald-200/50 dark:border-emerald-800/50"
+                                title={t('accounts.client_cli_tooltip', '当前 Antigravity CLI (agy) 登录账号')}
+                            >
+                                {t('accounts.client_cli', 'CLI')}
+                            </span>
+                        )}
+                        {!isClassic && !isIde && !isAgy && isCurrent && (
                             <span className="px-2 py-0.5 rounded-md bg-blue-100 dark:bg-blue-900/50 text-blue-700 dark:text-blue-300 text-[10px] font-bold shadow-sm border border-blue-200/50 dark:border-blue-800/50">
                                 {t('accounts.current').toUpperCase()}
                             </span>
@@ -654,6 +694,7 @@ function AccountTable({
     onToggleSelect,
     onToggleAll,
     currentAccountId,
+    activeClients,
     switchingAccountId,
     onSwitch,
     onRefresh,
@@ -835,6 +876,7 @@ function AccountTable({
                                     selected={selectedIds.has(account.id)}
                                     isRefreshing={refreshingIds.has(account.id)}
                                     isCurrent={account.id === currentAccountId}
+                                    activeClients={activeClients}
                                     isSwitching={account.id === switchingAccountId}
                                     isDragging={account.id === activeId}
                                     onSelect={() => onToggleSelect(account.id)}
@@ -879,6 +921,7 @@ function AccountTable({
                                     <AccountRowContent
                                         account={activeAccount}
                                         isCurrent={activeAccount.id === currentAccountId}
+                                        activeClients={activeClients}
                                         isRefreshing={refreshingIds.has(activeAccount.id)}
                                         isSwitching={activeAccount.id === switchingAccountId}
                                         onSwitch={() => { }}
