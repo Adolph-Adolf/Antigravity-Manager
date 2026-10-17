@@ -641,6 +641,25 @@ impl RateLimitTracker {
             account_id.to_string()
         };
 
+        // [防倒退保护] 若已有更长、未过期的锁定时间，防止被后续较短的重置时间覆盖（如长周期配额耗尽不被瞬时 5s 报错冲刷）
+        if let Some(existing) = self.limits.get(&key) {
+            let now = SystemTime::now();
+            if existing.reset_time > now && existing.reset_time > info.reset_time {
+                tracing::info!(
+                    "账号 {} [{}] 忽略较短限流延时 (现有锁定剩余 {}s > 新延时 {}s)",
+                    account_id,
+                    status,
+                    existing
+                        .reset_time
+                        .duration_since(now)
+                        .unwrap_or_default()
+                        .as_secs(),
+                    retry_sec
+                );
+                return Some(existing.clone());
+            }
+        }
+
         self.limits.insert(key, info.clone());
 
         tracing::warn!(
@@ -660,20 +679,24 @@ impl RateLimitTracker {
         let trimmed = body.trim();
         if trimmed.starts_with('{') || trimmed.starts_with('[') {
             if let Ok(json) = serde_json::from_str::<serde_json::Value>(trimmed) {
-                if let Some(reason_str) = json
+                // 遍历 details 数组中的所有对象，防止 ErrorInfo 并非位于 index 0 时漏判
+                if let Some(details) = json
                     .get("error")
                     .and_then(|e| e.get("details"))
                     .and_then(|d| d.as_array())
-                    .and_then(|a| a.get(0))
-                    .and_then(|o| o.get("reason"))
-                    .and_then(|v| v.as_str())
                 {
-                    return match reason_str {
-                        "QUOTA_EXHAUSTED" => RateLimitReason::QuotaExhausted,
-                        "RATE_LIMIT_EXCEEDED" => RateLimitReason::RateLimitExceeded,
-                        "MODEL_CAPACITY_EXHAUSTED" => RateLimitReason::ModelCapacityExhausted,
-                        _ => RateLimitReason::Unknown,
-                    };
+                    for item in details {
+                        if let Some(reason_str) = item.get("reason").and_then(|v| v.as_str()) {
+                            match reason_str {
+                                "QUOTA_EXHAUSTED" => return RateLimitReason::QuotaExhausted,
+                                "RATE_LIMIT_EXCEEDED" => return RateLimitReason::RateLimitExceeded,
+                                "MODEL_CAPACITY_EXHAUSTED" => {
+                                    return RateLimitReason::ModelCapacityExhausted
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
                 }
                 // [NEW] 尝试从 message 字段进行文本匹配（防止 missed reason）
                 if let Some(msg) = json
@@ -1337,5 +1360,84 @@ mod tests {
         assert!(tracker.is_rate_limited("acc_text", Some("gemini-2.5-pro")));
         // 归一化标准 ID 也能探测到该锁定
         assert!(tracker.is_rate_limited("acc_text", Some("gemini-3-pro-high")));
+    }
+
+    #[test]
+    fn test_parse_from_error_anti_regression_preserves_longer_lock() {
+        let tracker = RateLimitTracker::new();
+        let model = Some("gemini-2.5-pro".to_string());
+
+        // 1. 模拟遭遇一次配额耗尽锁定（受 backoff_steps 上限约束为 300 秒）
+        let quota_body = r#"{
+            "error": {
+                "details": [
+                    {
+                        "reason": "QUOTA_EXHAUSTED",
+                        "metadata": { "quotaResetDelay": "3600s" }
+                    }
+                ]
+            }
+        }"#;
+        let info1 = tracker
+            .parse_from_error(
+                "acc-anti-reg",
+                429,
+                None,
+                quota_body,
+                model.clone(),
+                &[60, 300],
+            )
+            .unwrap();
+        assert_eq!(info1.retry_after_sec, 300);
+
+        // 2. 紧接着并发请求返回了一个无明确延时的通用 429（默认回退为较短的 60 秒退避）
+        let generic_429_body = r#"{"error":{"message":"Rate limit exceeded"}}"#;
+        let info2 = tracker
+            .parse_from_error(
+                "acc-anti-reg",
+                429,
+                None,
+                generic_429_body,
+                model.clone(),
+                &[60, 300],
+            )
+            .unwrap();
+
+        // [防倒退校验] info2 必须保留现有的较长锁定，不能被 60s 冲刷覆盖！
+        let wait = tracker.get_remaining_wait("acc-anti-reg", model.as_deref());
+        assert!(
+            wait > 250,
+            "现有锁定时间被冲刷！期望 >250s，实际: {}s",
+            wait
+        );
+        assert_eq!(info2.retry_after_sec, 300);
+    }
+
+    #[test]
+    fn test_parse_rate_limit_reason_details_not_at_index_0() {
+        let tracker = RateLimitTracker::new();
+        // details[0] 是 Help 结构，details[1] 才是 ErrorInfo
+        let body = r#"{
+            "error": {
+                "code": 429,
+                "message": "Resource has been exhausted",
+                "details": [
+                    {
+                        "@type": "type.googleapis.com/google.rpc.Help",
+                        "links": [{"description": "Google developer console", "url": "https://console.developers.google.com"}]
+                    },
+                    {
+                        "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                        "reason": "QUOTA_EXHAUSTED"
+                    }
+                ]
+            }
+        }"#;
+        let reason = tracker.parse_rate_limit_reason(body);
+        assert_eq!(
+            reason,
+            RateLimitReason::QuotaExhausted,
+            "未扫描全部 details 导致漏判 index > 0 的 ErrorInfo"
+        );
     }
 }

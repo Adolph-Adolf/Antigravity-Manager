@@ -727,18 +727,6 @@ impl TokenManager {
             return Err(format!("账号目录不存在: {:?}", accounts_dir));
         }
 
-        // Reload should reflect current on-disk state (accounts can be added/removed/disabled).
-        self.tokens.clear();
-        self.sync_image_scheduler_accounts();
-        self.current_index.store(0, Ordering::SeqCst);
-        {
-            let mut last_used = self.last_used_account.lock().await;
-            *last_used = None;
-        }
-
-        let entries =
-            std::fs::read_dir(&accounts_dir).map_err(|e| format!("读取账号目录失败: {}", e))?;
-
         // 读取 accounts.json 索引，过滤掉用户在索引中标记为 disabled 或 proxy_disabled 的账号，防止实体文件残留导致已停用账号渗入代理池
         let index_file = self.resolved_data_dir().join("accounts.json");
         let disabled_in_index: std::collections::HashSet<String> = if index_file.exists() {
@@ -779,13 +767,14 @@ impl TokenManager {
             std::collections::HashSet::new()
         };
 
-        let mut count = 0;
+        let entries =
+            std::fs::read_dir(&accounts_dir).map_err(|e| format!("读取账号目录失败: {}", e))?;
+
+        // 阶段 1：在局部集合中加载新账号，严禁提前清空现有活跃池导致并发 503 宕机
+        let mut new_tokens = std::collections::HashMap::new();
 
         for entry in entries {
-            let entry = entry.map_err(|e| {
-                self.sync_image_scheduler_accounts();
-                format!("读取目录项失败: {}", e)
-            })?;
+            let entry = entry.map_err(|e| format!("读取目录项失败: {}", e))?;
             let path = entry.path();
 
             if path.extension().and_then(|s| s.to_str()) != Some("json") {
@@ -835,14 +824,33 @@ impl TokenManager {
             match self.load_single_account(&path).await {
                 Ok(Some(token)) => {
                     let account_id = token.account_id.clone();
-                    self.tokens.insert(account_id, token);
-                    count += 1;
+                    new_tokens.insert(account_id, token);
                 }
                 Ok(None) => {
                     // 跳过无效账号
                 }
                 Err(e) => {
                     tracing::warn!("加载账号失败 {:?}: {}", path, e);
+                }
+            }
+        }
+
+        let count = new_tokens.len();
+
+        // 阶段 2：零停机平滑原子同步到 self.tokens
+        // 剔除已在磁盘删除或停用的账号
+        self.tokens.retain(|k, _| new_tokens.contains_key(k));
+        // 更新或插入新载入的有效账号
+        for (k, v) in new_tokens {
+            self.tokens.insert(k, v);
+        }
+
+        // 若上次记录的使用账号已不在池中，则安全清理
+        {
+            let mut last_used = self.last_used_account.lock().await;
+            if let Some((ref acc_id, _)) = *last_used {
+                if !self.tokens.contains_key(acc_id) {
+                    *last_used = None;
                 }
             }
         }
@@ -5315,6 +5323,44 @@ mod tests {
             .get_token("claude", false, None, "claude-sonnet-4-6")
             .await
             .is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_zero_downtime_atomic_account_reload() {
+        let _data_dir = crate::proxy::monitor::prompt_log_tests::TestDataDir::new();
+        let data_dir = crate::modules::account::get_data_dir().unwrap();
+        let accounts = data_dir.join("accounts");
+        std::fs::create_dir_all(&accounts).unwrap();
+
+        let now = chrono::Utc::now().timestamp();
+        let mut acc1 = weekly_quota_account(now);
+        acc1["id"] = serde_json::json!("acc-1");
+        std::fs::write(accounts.join("acc-1.json"), acc1.to_string()).unwrap();
+
+        let manager = TokenManager::new(data_dir.clone());
+        let count = manager.load_accounts().await.unwrap();
+        assert_eq!(count, 1);
+        assert!(manager.tokens.contains_key("acc-1"));
+
+        // 模拟磁盘写入新账号 acc-2
+        let mut acc2 = weekly_quota_account(now);
+        acc2["id"] = serde_json::json!("acc-2");
+        std::fs::write(accounts.join("acc-2.json"), acc2.to_string()).unwrap();
+
+        // 重新加载：平滑同步，包含两账号
+        let count2 = manager.load_accounts().await.unwrap();
+        assert_eq!(count2, 2);
+        assert!(manager.tokens.contains_key("acc-1"));
+        assert!(manager.tokens.contains_key("acc-2"));
+
+        // 模拟磁盘删除 acc-1
+        std::fs::remove_file(accounts.join("acc-1.json")).unwrap();
+
+        // 重新加载：acc-1 被安全剔除，acc-2 保留
+        let count3 = manager.load_accounts().await.unwrap();
+        assert_eq!(count3, 1);
+        assert!(!manager.tokens.contains_key("acc-1"));
+        assert!(manager.tokens.contains_key("acc-2"));
     }
 
     #[tokio::test]

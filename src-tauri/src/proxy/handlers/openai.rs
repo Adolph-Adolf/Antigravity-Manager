@@ -2497,10 +2497,22 @@ pub async fn handle_chat_completions(
                 let mut retry_this_account = false;
 
                 // Loop to skip heartbeats during peek
-                // [FIX #3621] 采用固定截止时间点，杜绝遇到心跳重置 30s 倒计时导致长时间死等
-                let peek_timeout_secs = super::common::calculate_adaptive_peek_timeout(
+                // [FIX #3621, #3693] 采用自适应截止时间点，对深度思考/推理模型赋予 60s+ 宽限，杜绝 30s 误杀
+                let is_thinking = openai_req.thinking.is_some()
+                    || openai_req.reasoning.is_some()
+                    || openai_req.reasoning_effort.is_some()
+                    || mapped_model.contains("thinking")
+                    || mapped_model.contains("o1")
+                    || mapped_model.contains("o3")
+                    || mapped_model.contains("o4")
+                    || gemini_body
+                        .get("generationConfig")
+                        .and_then(|gc| gc.get("thinkingConfig"))
+                        .is_some();
+                let peek_timeout_secs = super::common::calculate_adaptive_peek_timeout_full(
                     false,
                     config.request_type == "image_gen",
+                    is_thinking,
                     None,
                 );
                 let peek_deadline =
@@ -4326,13 +4338,31 @@ pub async fn handle_completions(
                     let mut first_data_chunk = None;
                     let mut retry_this_account = false;
 
-                    // [FIX #3621] 采用固定截止时间点，杜绝遇到心跳重置倒计时导致长时间死等
-                    let peek_deadline =
-                        tokio::time::Instant::now() + std::time::Duration::from_secs(30);
+                    // [FIX #3621, #3693] 采用自适应截止时间点，对深度思考/推理模型赋予 60s+ 宽限，杜绝 30s 误杀
+                    let is_thinking = openai_req.thinking.is_some()
+                        || openai_req.reasoning.is_some()
+                        || openai_req.reasoning_effort.is_some()
+                        || mapped_model.contains("thinking")
+                        || mapped_model.contains("o1")
+                        || mapped_model.contains("o3")
+                        || mapped_model.contains("o4")
+                        || gemini_body
+                            .get("generationConfig")
+                            .and_then(|gc| gc.get("thinkingConfig"))
+                            .is_some();
+                    let peek_timeout_secs = super::common::calculate_adaptive_peek_timeout_full(
+                        false,
+                        config.request_type == "image_gen",
+                        is_thinking,
+                        None,
+                    );
+                    let peek_deadline = tokio::time::Instant::now()
+                        + std::time::Duration::from_secs(peek_timeout_secs);
                     loop {
                         let now = tokio::time::Instant::now();
                         if now >= peek_deadline {
-                            last_error = "Timeout waiting for first data (30s)".to_string();
+                            last_error =
+                                format!("Timeout waiting for first data ({}s)", peek_timeout_secs);
                             retry_this_account = true;
                             break;
                         }
@@ -4493,13 +4523,30 @@ pub async fn handle_completions(
                     // Peek Logic (Repeated for safety/correctness on this stream type)
                     let mut first_data_chunk = None;
                     let mut retry_this_account = false;
-                    // [FIX #3621] 采用固定截止时间点，杜绝遇到心跳重置倒计时导致长时间死等
-                    let peek_deadline =
-                        tokio::time::Instant::now() + std::time::Duration::from_secs(30);
+                    // [FIX #3621, #3693] 采用自适应截止时间点，对深度思考/推理模型赋予 60s+ 宽限，杜绝 30s 误杀
+                    let is_thinking = openai_req.thinking.is_some()
+                        || openai_req.reasoning.is_some()
+                        || openai_req.reasoning_effort.is_some()
+                        || mapped_model.contains("thinking")
+                        || mapped_model.contains("o1")
+                        || mapped_model.contains("o3")
+                        || mapped_model.contains("o4")
+                        || gemini_body
+                            .get("generationConfig")
+                            .and_then(|gc| gc.get("thinkingConfig"))
+                            .is_some();
+                    let peek_timeout_secs = super::common::calculate_adaptive_peek_timeout_full(
+                        false,
+                        config.request_type == "image_gen",
+                        is_thinking,
+                        None,
+                    );
+                    let peek_deadline = tokio::time::Instant::now()
+                        + std::time::Duration::from_secs(peek_timeout_secs);
                     loop {
                         let now = tokio::time::Instant::now();
                         if now >= peek_deadline {
-                            last_error = "Timeout peek internal (30s)".to_string();
+                            last_error = format!("Timeout peek internal ({}s)", peek_timeout_secs);
                             retry_this_account = true;
                             break;
                         }

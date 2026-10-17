@@ -2200,11 +2200,13 @@ pub async fn handle_messages(
                 let mut retry_this_account = false;
 
                 // Loop to skip heartbeats during peek (for non-streaming requests)
-                // [FIX #3634] 动态自适应计算 Peek 超时时间，并受全局剩余请求预算严格约束，
-                // 彻底杜绝大 Prompt 预热（TTFT > 30s）被误杀，同时杜绝累积超时触发客户端 5 分钟看门狗
-                let base_peek_secs = super::common::calculate_adaptive_peek_timeout(
+                // [FIX #3634, #3693] 动态自适应计算 Peek 超时时间（支持 thinking 宽限），并受全局剩余请求预算严格约束，
+                // 彻底杜绝大 Prompt / 深度思考预热（TTFT > 30s）被误杀，同时杜绝累积超时触发客户端 5 分钟看门狗
+                let is_thinking = request.thinking.is_some() || mapped_model.contains("thinking");
+                let base_peek_secs = super::common::calculate_adaptive_peek_timeout_full(
                     is_compaction_request,
                     false,
+                    is_thinking,
                     Some(raw_estimated),
                 );
                 let current_remaining_secs = global_deadline

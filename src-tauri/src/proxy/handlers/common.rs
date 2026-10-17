@@ -159,9 +159,10 @@ pub fn calculate_max_retry_attempts(pool_size: usize) -> usize {
 /// 结构化规范化错误（504 Gateway Timeout 或 429/503），避免客户端弹出未响应警告框。
 pub const MAX_GATEWAY_REQUEST_BUDGET_SECS: u64 = 240;
 
-/// [Issue #3634] 统一自适应计算流预读（Peek）阶段的超时时间。
+/// [Issue #3634, #3693] 统一自适应计算流预读（Peek）阶段的超时时间。
 /// - Compaction 摘要请求：大 Prompt 处理，默认 180s；
 /// - 图像生成请求：图像生成耗时较长，默认 60s；
+/// - 思考/深度推理模型请求：思考阶段 TTFT 较长，底线 60s（大上下文 90s/120s）；
 /// - 正常会话请求：根据估算 Token 数量动态自适应，避免大上下文 Prompt 预热（TTFT）超过 30s 被过早误杀导致全池轮换雪崩；
 ///   * > 100k tokens: 120s
 ///   * > 50k tokens: 90s
@@ -172,10 +173,26 @@ pub fn calculate_adaptive_peek_timeout(
     is_image_gen: bool,
     estimated_tokens: Option<u32>,
 ) -> u64 {
+    calculate_adaptive_peek_timeout_full(is_compaction, is_image_gen, false, estimated_tokens)
+}
+
+pub fn calculate_adaptive_peek_timeout_full(
+    is_compaction: bool,
+    is_image_gen: bool,
+    is_thinking: bool,
+    estimated_tokens: Option<u32>,
+) -> u64 {
     if is_compaction {
         180
     } else if is_image_gen {
         60
+    } else if is_thinking {
+        // [Issue #3693] 深度思考模型预热耗时长，设置 60s 宽限底线，防止过早误杀
+        match estimated_tokens {
+            Some(tokens) if tokens >= 100_000 => 120,
+            Some(tokens) if tokens >= 50_000 => 90,
+            _ => 60,
+        }
     } else {
         match estimated_tokens {
             Some(tokens) if tokens >= 100_000 => 120,
@@ -1066,6 +1083,24 @@ mod retry_after_tests {
             30
         );
         assert_eq!(calculate_adaptive_peek_timeout(false, false, None), 30);
+
+        // 4. 思考/推理模型赋予至少 60s 底线，防止 30s 误杀
+        assert_eq!(
+            calculate_adaptive_peek_timeout_full(false, false, true, None),
+            60
+        );
+        assert_eq!(
+            calculate_adaptive_peek_timeout_full(false, false, true, Some(10_000)),
+            60
+        );
+        assert_eq!(
+            calculate_adaptive_peek_timeout_full(false, false, true, Some(60_000)),
+            90
+        );
+        assert_eq!(
+            calculate_adaptive_peek_timeout_full(false, false, true, Some(120_000)),
+            120
+        );
     }
 
     #[test]
