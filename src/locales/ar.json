@@ -202,7 +202,11 @@
         "health_available_rate": "معدل الجاهزية السليمة",
         "circuit_break": "قاطع الدائرة",
         "health_all_green": "سليم تمامًا",
-        "abnormal_badge": "{{count}} غير طبيعي"
+        "abnormal_badge": "{{count}} غير طبيعي",
+        "no_client_account": "لا يوجد حساب نشط أو مرتبط بهذا التطبيق",
+        "go_switch_account": "الانتقال إلى تبديل الحساب",
+        "switch_best_to_target": "تبديل أفضل حساب إلى {{target}}",
+        "switch_this_to_target": "تبديل هذا الحساب إلى {{target}}"
     },
     "accounts": {
         "account": "الحساب",

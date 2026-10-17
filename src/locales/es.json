@@ -204,7 +204,11 @@
         "health_available_rate": "Disponibilidad Saludable",
         "circuit_break": "Interrumpido",
         "health_all_green": "Todo Saludable",
-        "abnormal_badge": "{{count}} Anormales"
+        "abnormal_badge": "{{count}} Anormales",
+        "no_client_account": "No hay ninguna cuenta activa o vinculada para esta aplicación",
+        "go_switch_account": "Ir a cambiar de cuenta",
+        "switch_best_to_target": "Cambiar la mejor cuenta a {{target}}",
+        "switch_this_to_target": "Cambiar esta cuenta a {{target}}"
     },
     "accounts": {
         "account": "Cuenta",

@@ -203,7 +203,11 @@
         "health_available_rate": "Sağlıklı Kullanılabilirlik",
         "circuit_break": "Kesildi",
         "health_all_green": "Tamamen Sağlıklı",
-        "abnormal_badge": "{{count}} Anormal"
+        "abnormal_badge": "{{count}} Anormal",
+        "no_client_account": "Bu uygulama için etkin veya bağlı hesap bulunamadı",
+        "go_switch_account": "Hesap değiştirmeye git",
+        "switch_best_to_target": "En iyi hesabı {{target}} olarak değiştir",
+        "switch_this_to_target": "Bu hesabı {{target}} olarak değiştir"
     },
     "accounts": {
         "account": "Hesap",

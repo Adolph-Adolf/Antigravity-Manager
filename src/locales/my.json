@@ -202,7 +202,11 @@
         "health_available_rate": "ကျန်းမာစွာ အသုံးပြုနိုင်မှုနှုန်း",
         "circuit_break": "ဖြတ်တောက်မှု",
         "health_all_green": "အားလုံး ကောင်းမွန်သည်",
-        "abnormal_badge": "{{count}} ပုံမှန်မဟုတ်ပါ"
+        "abnormal_badge": "{{count}} ပုံမှန်မဟုတ်ပါ",
+        "no_client_account": "ဤအက်ပ်အတွက် အသုံးပြုနေသော အကောင့်မရှိပါ",
+        "go_switch_account": "အကောင့်ပြောင်းရန် သွားပါ",
+        "switch_best_to_target": "အကောင်းဆုံးအကောင့်ကို {{target}} သို့ ပြောင်းပါ",
+        "switch_this_to_target": "ဤအကောင့်ကို {{target}} သို့ ပြောင်းပါ"
     },
     "accounts": {
         "account": "အကောင့်",

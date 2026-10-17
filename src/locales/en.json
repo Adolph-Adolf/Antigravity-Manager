@@ -219,7 +219,11 @@
         "health_available_rate": "Healthy Availability",
         "circuit_break": "Tripped",
         "health_all_green": "All Healthy",
-        "abnormal_badge": "{{count}} Abnormal"
+        "abnormal_badge": "{{count}} Abnormal",
+        "no_client_account": "No active or bound account for this application",
+        "go_switch_account": "Go to Switch Account",
+        "switch_best_to_target": "Switch Best Account to {{target}}",
+        "switch_this_to_target": "Switch this account to {{target}}"
     },
     "accounts": {
         "account": "Account",

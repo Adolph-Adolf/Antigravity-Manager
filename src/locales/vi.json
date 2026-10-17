@@ -203,7 +203,11 @@
         "health_available_rate": "Khả dụng khỏe mạnh",
         "circuit_break": "Ngắt mạch",
         "health_all_green": "Hoàn toàn khỏe mạnh",
-        "abnormal_badge": "{{count}} bất thường"
+        "abnormal_badge": "{{count}} bất thường",
+        "no_client_account": "Không có tài khoản nào đang hoạt động hoặc được liên kết cho ứng dụng này",
+        "go_switch_account": "Đi đến chuyển tài khoản",
+        "switch_best_to_target": "Chuyển tài khoản tốt nhất sang {{target}}",
+        "switch_this_to_target": "Chuyển tài khoản này sang {{target}}"
     },
     "accounts": {
         "account": "Tài khoản",

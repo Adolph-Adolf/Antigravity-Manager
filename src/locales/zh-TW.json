@@ -203,7 +203,11 @@
         "health_available_rate": "健康可用率",
         "circuit_break": "熔斷",
         "health_all_green": "全綠無風險",
-        "abnormal_badge": "{{count}} 異常"
+        "abnormal_badge": "{{count}} 異常",
+        "no_client_account": "該應用當前暫無登錄或綁定的帳號",
+        "go_switch_account": "前往切換帳號",
+        "switch_best_to_target": "一鍵切換最佳帳號到 {{target}}",
+        "switch_this_to_target": "一鍵將此帳號切換到 {{target}}"
     },
     "accounts": {
         "account": "帳號",

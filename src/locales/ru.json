@@ -204,7 +204,11 @@
         "health_available_rate": "Доступность",
         "circuit_break": "Сбой",
         "health_all_green": "Все в норме",
-        "abnormal_badge": "{{count}} сбоев"
+        "abnormal_badge": "{{count}} сбоев",
+        "no_client_account": "Нет активного или привязанного аккаунта для этого приложения",
+        "go_switch_account": "Перейти к смене аккаунта",
+        "switch_best_to_target": "Переключить лучший аккаунт на {{target}}",
+        "switch_this_to_target": "Переключить этот аккаунт на {{target}}"
     },
     "accounts": {
         "account": "Аккаунт",

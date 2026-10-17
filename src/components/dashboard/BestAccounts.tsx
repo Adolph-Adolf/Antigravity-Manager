@@ -236,7 +236,7 @@ function BestAccounts({ accounts, currentAccountId, activeClients, onSwitch }: B
                                 <button
                                     onClick={() => onSwitch(bestGeminiRender.id, targetIde)}
                                     className="p-1 rounded-lg text-gray-400 hover:text-blue-600 dark:hover:text-blue-400 hover:bg-white/80 dark:hover:bg-white/10 transition-colors cursor-pointer"
-                                    title={`一键将此账号切换到 ${currentTargetName}`}
+                                    title={t('dashboard.switch_this_to_target', { target: currentTargetName })}
                                 >
                                     <ArrowRightLeft className="w-3.5 h-3.5" />
                                 </button>
@@ -262,7 +262,7 @@ function BestAccounts({ accounts, currentAccountId, activeClients, onSwitch }: B
                                 <button
                                     onClick={() => onSwitch(bestClaudeRender.id, targetIde)}
                                     className="p-1 rounded-lg text-gray-400 hover:text-blue-600 dark:hover:text-blue-400 hover:bg-white/80 dark:hover:bg-white/10 transition-colors cursor-pointer"
-                                    title={`一键将此账号切换到 ${currentTargetName}`}
+                                    title={t('dashboard.switch_this_to_target', { target: currentTargetName })}
                                 >
                                     <ArrowRightLeft className="w-3.5 h-3.5" />
                                 </button>
@@ -294,7 +294,7 @@ function BestAccounts({ accounts, currentAccountId, activeClients, onSwitch }: B
                         }}
                     >
                         <Zap className="w-3.5 h-3.5" />
-                        <span>一键切换最佳账号到 {currentTargetName}</span>
+                        <span>{t('dashboard.switch_best_to_target', { target: currentTargetName })}</span>
                     </button>
                 </div>
             )}

@@ -217,7 +217,11 @@
         "health_available_rate": "健康可用率",
         "circuit_break": "熔断",
         "health_all_green": "全绿无风险",
-        "abnormal_badge": "{{count}} 异常"
+        "abnormal_badge": "{{count}} 异常",
+        "no_client_account": "该应用当前暂无登录或绑定的账号",
+        "go_switch_account": "前往切换账号",
+        "switch_best_to_target": "一键切换最佳账号到 {{target}}",
+        "switch_this_to_target": "一键将此账号切换到 {{target}}"
     },
     "accounts": {
         "account": "账号",
