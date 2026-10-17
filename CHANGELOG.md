@@ -3,6 +3,13 @@
 > 完整版本历史记录。返回项目主页请查看 [README_ZH.md](README_ZH.md) | [English Changelog](CHANGELOG_EN.md)。
 
 *   **版本演进**:
+    *   **v4.9.8-beta.8 (2026-10-17)**:
+        -   **[对齐 Claude Code 2.1.301 协议规范、全链路请求追溯与 Claude 5 模型族] (PR #3689, Ref #3684, Ref #3686, Thanks to @cubelikeplayDaniel)**:
+            -   **防 WAF 身份清洗扩展与 Agent SDK CLI 深度对齐**: 针对 `@anthropic-ai/claude-code@2.1.301` 引入的第三种复合身份提示词（Agent SDK CLI 运行时开场白：`You are Claude Code, Anthropic's official CLI for Claude, running within the Claude Agent SDK.`），在 `prompt_sanitizer.rs` 中全面扩展 `RE_WAF_TRIGGER_HEADERS` 与身份归一化清洗规则；全面识别并清洗 `cc_workload`、`cc_is_subagent`、`cc_prev_req`、`cc_prompt_id`、`cc_turn_origin` 等 2.1.301 扩展归属元数据请求头，坚决杜绝因上游 Google Cloud Code WAF 识别非白名单特征触发 429 限流风控。(PR #3689, Ref #3684, Thanks to @cubelikeplayDaniel)
+            -   **全链路下行追踪对齐 (request-id)**: 在 Claude 协议处理器（`handlers/claude.rs`）的流式 (SSE)、流聚合 JSON 与非流式 JSON 三大响应分支中，统一对齐注入 `request-id: req_{trace_id}` 响应头，与客户端 `x-gateway-upstream-request-id` 严格对应，确保客户端在网络重试与会话归档时可无缝回溯全链路会话日志。(PR #3689, Thanks to @cubelikeplayDaniel)
+            -   **Claude 协议规范补全与自适应思考展示控制**: 在 Claude 模型定义中补充 `ThinkingConfig.display`（支持 `"omitted"` / `"summarized"` / `"highlights"`）以适配自适应思考模式下的展示控制属性；在 `Usage` 中补充 `cache_creation` 结构，无缝接收与传递下行缓存创建 Token 分布，杜绝反序列化丢项或报错。(PR #3689, Thanks to @cubelikeplayDaniel)
+            -   **Claude 5 模型族录入与 CLI 动态同步**: 在 `cli_sync.rs` 的网关核心模型列表（`get_core_gateway_models()`）中全面录入 Claude 5 系列 8 个核心模型（`claude-fable-5`、`claude-opus-5-5`、`claude-sonnet-5-5`、`claude-haiku-5-5` 及其思考变体），上调上下文规格至 256k，确保 Antigravity CLI (`agy`) 与 JeikCode 配置文件能够完整识别并动态同步新模型。(PR #3689, Ref #3686, Thanks to @cubelikeplayDaniel)
+
     *   **v4.9.8-beta.7 (2026-10-16)**:
         -   **[Antigravity CLI (agy) 原生全面演进、防遥测封号与模型动态选择导入] (Ref #3686)**:
             -   **平滑迁移至 Antigravity CLI (agy)**: 在 CLI 配置同步模块中正式迁移支持 Antigravity CLI (`agy`)，并保持对旧版 `gemini` CLI 探测与配置恢复的 100% 向后兼容。 (Ref #3686)

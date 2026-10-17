@@ -3,6 +3,13 @@
 > Complete version history for Antigravity Tools. Return to project home at [README.md](README.md).
 
 *   **Version History**:
+    *   **v4.9.8-beta.8 (2026-10-17)**:
+        -   **[Align with Claude Code 2.1.301 Protocol Specification, Full-Link Traceability & Claude 5 Models] (PR #3689, Ref #3684, Ref #3686, Thanks to @cubelikeplayDaniel)**:
+            -   **Anti-WAF Identity Sanitization & Agent SDK CLI Preamble Alignment**: Addressed third-party preamble changes introduced in `@anthropic-ai/claude-code@2.1.301` (`You are Claude Code, Anthropic's official CLI for Claude, running within the Claude Agent SDK.`). Extended `RE_WAF_TRIGGER_HEADERS` and prompt normalization in `prompt_sanitizer.rs` to strip Agent SDK CLI preambles and clean new telemetry headers (`cc_workload`, `cc_is_subagent`, `cc_prev_req`, `cc_prompt_id`, `cc_turn_origin`), preventing Google Cloud Code WAF from triggering spurious 429 rate limit errors. (PR #3689, Ref #3684, Thanks to @cubelikeplayDaniel)
+            -   **Full-Link Downstream Traceability (request-id)**: Unified injection of `request-id: req_{trace_id}` across streaming (SSE), streaming aggregation JSON, and non-streaming JSON responses in `handlers/claude.rs`. Correlates with client-side `x-gateway-upstream-request-id` headers, allowing seamless session tracing and error audit during client retries. (PR #3689, Thanks to @cubelikeplayDaniel)
+            -   **Claude Protocol Schema Alignment & Adaptive Thinking Display**: Added `ThinkingConfig.display` (`"omitted"` | `"summarized"` | `"highlights"`) to support display control attributes under adaptive reasoning mode; added `Usage.cache_creation` to cleanly receive and relay cache creation token distribution metrics, eliminating deserialization omissions or errors. (PR #3689, Thanks to @cubelikeplayDaniel)
+            -   **Claude 5 Model Family Registration & CLI Sync**: Registered 8 core Claude 5 model definitions (`claude-fable-5`, `claude-opus-5-5`, `claude-sonnet-5-5`, `claude-haiku-5-5` and their thinking variants with 256k context) in `cli_sync.rs` (`get_core_gateway_models()`), enabling full discovery and dynamic synchronization for Antigravity CLI (`agy`) and JeikCode configuration files. (PR #3689, Ref #3686, Thanks to @cubelikeplayDaniel)
+
     *   **v4.9.8-beta.7 (2026-10-16)**:
         -   **[Antigravity CLI (agy) Native Evolution, Anti-Telemetry Tracking & Dynamic Model Selection] (Ref #3686)**:
             -   **Smooth Migration to Antigravity CLI (agy)**: Officially migrated the CLI synchronization module to support Antigravity CLI (`agy`), while maintaining 100% backward compatibility for legacy `gemini` CLI detection and restoration. (Ref #3686)
