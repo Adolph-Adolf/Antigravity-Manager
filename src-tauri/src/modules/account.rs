@@ -1870,6 +1870,45 @@ fn is_validation_required_error(err: &crate::error::AppError) -> bool {
         || text.contains("validation_url")
         || text.contains("appeal_url")
         || text.contains("validation required")
+        || text.contains("validation_required")
+}
+
+pub fn extract_action_url(reason: &str) -> Option<String> {
+    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(reason) {
+        let metadata_url = parsed
+            .get("error")
+            .and_then(|e| e.get("details"))
+            .and_then(|d| d.as_array())
+            .and_then(|arr| arr.iter().find_map(|item| item.get("metadata")))
+            .and_then(|m| m.get("validation_url").or_else(|| m.get("appeal_url")))
+            .and_then(|u| u.as_str())
+            .map(|s| s.replace("\\u0026", "&"));
+
+        if metadata_url.is_some() {
+            return metadata_url;
+        }
+
+        let link_url = parsed
+            .get("error")
+            .and_then(|e| e.get("details"))
+            .and_then(|d| d.as_array())
+            .and_then(|arr| arr.iter().find_map(|item| item.get("links")))
+            .and_then(|links| links.as_array())
+            .and_then(|arr| arr.first())
+            .and_then(|item| item.get("url"))
+            .and_then(|u| u.as_str())
+            .map(|s| s.replace("\\u0026", "&"));
+
+        if link_url.is_some() {
+            return link_url;
+        }
+    }
+
+    let url_regex = regex::Regex::new(r#"https://[^\s"'\\]+"#).ok()?;
+    url_regex.find(reason).map(|m| {
+        let raw_url = m.as_str().to_string();
+        raw_url.replace("\\u0026", "&")
+    })
 }
 
 fn is_account_access_blocked_message(message: &str) -> bool {
@@ -1879,6 +1918,7 @@ fn is_account_access_blocked_message(message: &str) -> bool {
         || text.contains("validation_url")
         || text.contains("appeal_url")
         || text.contains("validation required")
+        || text.contains("validation_required")
         || text.contains("unauthorized_client")
         || text.contains("invalid_client")
         || text.contains("invalid_grant")
@@ -1904,6 +1944,7 @@ fn format_switch_refresh_error(message: &str) -> String {
         || lower.contains("validation_url")
         || lower.contains("appeal_url")
         || lower.contains("validation required")
+        || lower.contains("validation_required")
     {
         return format!(
             "Token refresh failed: account requires additional verification. Please finish verification in Antigravity, then retry account switch. Raw error: {}",
@@ -1929,12 +1970,28 @@ fn format_rate_limit_block_reason(err: &crate::error::AppError) -> String {
 }
 
 fn mark_validation_blocked(account: &mut Account, reason: &str) {
-    if account.validation_blocked && account.validation_blocked_reason.as_deref() == Some(reason) {
+    let now = chrono::Utc::now().timestamp();
+    let block_until = now + (10 * 60);
+    let extracted_url = extract_action_url(reason);
+
+    if account.validation_blocked
+        && account.validation_blocked_reason.as_deref() == Some(reason)
+        && account.validation_url == extracted_url
+    {
         return;
     }
 
     account.validation_blocked = true;
+    account.validation_blocked_until = Some(block_until);
     account.validation_blocked_reason = Some(reason.to_string());
+    if let Some(url) = extracted_url {
+        account.validation_url = Some(url);
+    }
+    if let Some(ref mut q) = account.quota {
+        q.is_forbidden = true;
+        q.forbidden_reason = Some(reason.to_string());
+    }
+
     if let Err(e) = save_account(account) {
         crate::modules::logger::log_warn(&format!(
             "Failed to persist validation_blocked state for {}: {}",
@@ -1948,6 +2005,7 @@ fn clear_validation_blocked(account: &mut Account) {
         && account.validation_blocked_until.is_none()
         && account.validation_blocked_reason.is_none()
         && account.validation_url.is_none()
+        && !account.proxy_disabled
     {
         return;
     }
@@ -1958,7 +2016,22 @@ fn clear_validation_blocked(account: &mut Account) {
     account.validation_url = None;
     if let Some(ref mut q) = account.quota {
         q.is_forbidden = false;
+        q.forbidden_reason = None;
     }
+
+    // Auto-recover proxy_disabled if it was caused by 403 or validation
+    if account.proxy_disabled
+        && account.proxy_disabled_reason.as_ref().map_or(false, |r| {
+            r.starts_with("Forbidden (403)")
+                || r.contains("403 Forbidden")
+                || r.contains("VALIDATION_REQUIRED")
+        })
+    {
+        account.proxy_disabled = false;
+        account.proxy_disabled_reason = None;
+        account.proxy_disabled_at = None;
+    }
+
     if let Err(e) = save_account(account) {
         crate::modules::logger::log_warn(&format!(
             "Failed to clear validation_blocked state for {}: {}",
@@ -2246,6 +2319,29 @@ pub fn update_account_quota(account_id: &str, quota: QuotaData) -> Result<(), St
     }
     // --- Quota protection logic end ---
 
+    // If quota retrieval succeeded and quota is not forbidden, auto-recover 403 / validation locks
+    if let Some(ref q) = account.quota {
+        if !q.is_forbidden {
+            clear_validation_blocked(&mut account);
+            if account.proxy_disabled
+                && account.proxy_disabled_reason.as_ref().map_or(false, |r| {
+                    r == "quota_protection"
+                        || r.starts_with("Forbidden (403)")
+                        || r.contains("403 Forbidden")
+                        || r.contains("VALIDATION_REQUIRED")
+                })
+            {
+                crate::modules::logger::log_info(&format!(
+                    "[Quota] Account {} recovered successfully, clearing proxy_disabled",
+                    account.email
+                ));
+                account.proxy_disabled = false;
+                account.proxy_disabled_reason = None;
+                account.proxy_disabled_at = None;
+            }
+        }
+    }
+
     // Quota snapshots may recover before an explicit long image lock expires. Other live
     // records retain the baseline percentage-based cleanup behavior.
     if let Some(ref q) = account.quota {
@@ -2341,6 +2437,11 @@ pub fn mark_account_forbidden(account_id: &str, reason: &str) -> Result<(), Stri
 
     let mut account = load_account(account_id)?;
 
+    // Extract action URL (appeal_url or validation_url)
+    if let Some(url) = extract_action_url(reason) {
+        account.validation_url = Some(url);
+    }
+
     // 1. Update quota status
     if let Some(ref mut q) = account.quota {
         q.is_forbidden = true;
@@ -2359,7 +2460,12 @@ pub fn mark_account_forbidden(account_id: &str, reason: &str) -> Result<(), Stri
 
     // 2. Disable proxy for this account
     account.proxy_disabled = true;
-    account.proxy_disabled_reason = Some(format!("Forbidden (403): {}", reason));
+    let formatted_reason = if reason.starts_with("Forbidden (403):") {
+        reason.to_string()
+    } else {
+        format!("Forbidden (403): {}", reason)
+    };
+    account.proxy_disabled_reason = Some(formatted_reason);
     account.proxy_disabled_at = Some(chrono::Utc::now().timestamp());
 
     save_account(&account)?;
@@ -2374,6 +2480,32 @@ pub fn mark_account_forbidden(account_id: &str, reason: &str) -> Result<(), Stri
     // 4. Notify frontend to refresh account list
     crate::modules::log_bridge::emit_accounts_refreshed();
 
+    Ok(())
+}
+
+pub fn mark_account_validation_blocked(
+    account_id: &str,
+    block_until: i64,
+    reason: &str,
+) -> Result<(), String> {
+    let _lock = ACCOUNT_INDEX_LOCK
+        .lock()
+        .map_err(|e| format!("failed_to_acquire_lock: {}", e))?;
+
+    let mut account = load_account(account_id)?;
+
+    mark_validation_blocked(&mut account, reason);
+    account.validation_blocked_until = Some(block_until);
+
+    save_account(&account)?;
+
+    // Update index summary to keep state synchronized
+    let mut index = load_account_index()?;
+    if let Some(_summary) = index.accounts.iter_mut().find(|a| a.id == account_id) {
+        save_account_index(&index)?;
+    }
+
+    crate::modules::log_bridge::emit_accounts_refreshed();
     Ok(())
 }
 
@@ -2618,7 +2750,9 @@ pub async fn fetch_quota_with_retry(account: &mut Account) -> crate::error::AppR
 
                 match retry_result {
                     Ok((q, _)) => {
-                        clear_validation_blocked(account);
+                        if !q.is_forbidden {
+                            clear_validation_blocked(account);
+                        }
                         return Ok(q);
                     }
                     Err(e) => {
@@ -2643,7 +2777,9 @@ pub async fn fetch_quota_with_retry(account: &mut Account) -> crate::error::AppR
     // fetch_quota already handles 403, with additional local fallback/validation handling.
     match result {
         Ok((q, _)) => {
-            clear_validation_blocked(account);
+            if !q.is_forbidden {
+                clear_validation_blocked(account);
+            }
             Ok(q)
         }
         Err(e) => {

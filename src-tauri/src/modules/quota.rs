@@ -343,18 +343,41 @@ pub async fn fetch_quota_with_cache(
                     }
 
                     // 403 说明该账号本身不可用（未验证 / 被限制）。
-                    //
-                    // 这里曾经有一段「剥离 project 后重试」的逻辑，现已删除：
-                    // 实测上游完全忽略 project 字段，剥离后仍是同一个 403，
-                    // 只会白白多打一次请求、拖慢判定。
                     if status == rquest::StatusCode::FORBIDDEN {
+                        let text = response.text().await.unwrap_or_default();
                         crate::modules::logger::log_warn(&format!(
-                            "Account unauthorized (403 Forbidden), marking as forbidden"
+                            "Account unauthorized (403 Forbidden): {}",
+                            text
                         ));
                         let mut q = QuotaData::new();
                         q.is_forbidden = true;
+                        q.forbidden_reason = Some(text.clone());
                         // 保留本次 loadCodeAssist 拿到的等级；拿不到才回退到已存值
                         q.subscription_tier = subscription_tier.clone();
+
+                        // 智能识别上游返回信息并分类处理
+                        if let Some(id) = account_id {
+                            let text_lower = text.to_lowercase();
+                            let is_validation = text_lower.contains("validation_required")
+                                || text_lower.contains("verify your account")
+                                || text_lower.contains("validation_url");
+
+                            if is_validation {
+                                let block_minutes = 10i64;
+                                let block_until = chrono::Utc::now().timestamp() + (block_minutes * 60);
+                                let _ = crate::modules::account::mark_account_validation_blocked(
+                                    id,
+                                    block_until,
+                                    &text,
+                                );
+                            } else {
+                                let _ = crate::modules::account::mark_account_forbidden(
+                                    id,
+                                    &format!("Forbidden (403): {}", text),
+                                );
+                            }
+                        }
+
                         return Ok((q, project_id.clone()));
                     }
 
@@ -847,16 +870,36 @@ pub async fn warm_up_all_accounts() -> Result<String, String> {
 
             for handle in handles {
                 if let Ok(Some((id, email, token, pid, Some((fresh_quota, _))))) = handle.await {
-                    // [FIX] 预热阶段检测到 403 时，使用统一禁用逻辑，确保账号文件和索引同时更新
+                    // [FIX] 预热阶段检测到 403 时，区分是否属于临时验证并使用统一禁用逻辑
                     if fresh_quota.is_forbidden {
-                        crate::modules::logger::log_warn(&format!(
-                            "[Warmup] Account {} returned 403 Forbidden during quota fetch, marking as forbidden",
-                            email
-                        ));
-                        let _ = crate::modules::account::mark_account_forbidden(
-                            &id,
-                            "Warmup: 403 Forbidden - quota fetch denied",
-                        );
+                        let is_validation = fresh_quota
+                            .forbidden_reason
+                            .as_deref()
+                            .map_or(false, |r| {
+                                let lower = r.to_lowercase();
+                                lower.contains("validation_required")
+                                    || lower.contains("verify your account")
+                                    || lower.contains("validation_url")
+                            });
+
+                        if is_validation {
+                            crate::modules::logger::log_warn(&format!(
+                                "[Warmup] Account {} requires validation (VALIDATION_REQUIRED), skipping warmup",
+                                email
+                            ));
+                        } else {
+                            crate::modules::logger::log_warn(&format!(
+                                "[Warmup] Account {} returned 403 Forbidden during quota fetch, marking as forbidden",
+                                email
+                            ));
+                            let _ = crate::modules::account::mark_account_forbidden(
+                                &id,
+                                fresh_quota
+                                    .forbidden_reason
+                                    .as_deref()
+                                    .unwrap_or("Warmup: 403 Forbidden - quota fetch denied"),
+                            );
+                        }
                         continue;
                     }
                     let mut account_warmed_series = std::collections::HashSet::new();
@@ -1018,16 +1061,36 @@ pub async fn warm_up_account(account_id: &str) -> Result<String, String> {
             .await
             .map_err(|e| format!("Failed to fetch quota: {}", e))?;
 
-    // [FIX] 预热阶段检测到 403 时，使用统一的 mark_account_forbidden 逻辑，
-    // 确保账号文件和索引文件同时更新，且前端刷新后能感知到禁用状态
+    // [FIX] 预热阶段检测到 403 时，区分是否属于临时验证并使用统一禁用逻辑
     if fresh_quota.is_forbidden {
-        crate::modules::logger::log_warn(&format!(
-            "[Warmup] Account {} returned 403 Forbidden during quota fetch, marking as forbidden",
-            email
-        ));
-        let reason = "Warmup: 403 Forbidden - quota fetch denied";
-        let _ = crate::modules::account::mark_account_forbidden(account_id, reason);
-        return Err("Account is forbidden (403)".to_string());
+        let is_validation = fresh_quota
+            .forbidden_reason
+            .as_deref()
+            .map_or(false, |r| {
+                let lower = r.to_lowercase();
+                lower.contains("validation_required")
+                    || lower.contains("verify your account")
+                    || lower.contains("validation_url")
+            });
+
+        if is_validation {
+            crate::modules::logger::log_warn(&format!(
+                "[Warmup] Account {} requires validation (VALIDATION_REQUIRED), skipping warmup",
+                email
+            ));
+            return Err("Account requires validation (VALIDATION_REQUIRED)".to_string());
+        } else {
+            crate::modules::logger::log_warn(&format!(
+                "[Warmup] Account {} returned 403 Forbidden during quota fetch, marking as forbidden",
+                email
+            ));
+            let reason = fresh_quota
+                .forbidden_reason
+                .as_deref()
+                .unwrap_or("Warmup: 403 Forbidden - quota fetch denied");
+            let _ = crate::modules::account::mark_account_forbidden(account_id, reason);
+            return Err("Account is forbidden (403)".to_string());
+        }
     }
 
     let mut models_to_warm = Vec::new();

@@ -3,6 +3,12 @@
 > 完整版本历史记录。返回项目主页请查看 [README_ZH.md](README_ZH.md) | [English Changelog](CHANGELOG_EN.md)。
 
 *   **版本演进**:
+    *   **v4.9.8-beta.9 (2026-10-17)**:
+        -   **[403 状态智能识别、上游操作指引提取与全自动闭环自愈] (Ref #3630, Ref #3684)**:
+            -   **403 报文体全量捕获与动作链接提取 (validation_url / appeal_url)**: 在配额探测模块（`modules/quota.rs`）中根除 403 立即丢弃响应体的缺陷；全量读取 Google RPC 错误详情报文，通过新增的 `extract_action_url` 精准解析 `details.metadata` 中的 `validation_url`（人机/安全验证链接）与 `appeal_url`（服务条款申诉链接）并持久化至账号模型。配合前端 `AccountErrorDialog`，即时点亮「点击去验证」、「复制验证链接」或「前往申诉」交互按钮，彻底告别空洞抽象的单一 403 报错状态。
+            -   **临时人机验证 (VALIDATION_REQUIRED) 与永久封禁严格解耦**: 在 Gemini、Claude 与 OpenAI 协议网关（`handlers/gemini.rs`、`handlers/claude.rs`、`handlers/openai.rs`）及预热检测中，将临时人机验证与永久封禁（`set_forbidden`）改造为严格互斥逻辑。发生 `VALIDATION_REQUIRED` 时仅进入 10 分钟观察窗口并记录验证链接，不再强行写入永久 `proxy_disabled = true`，杜绝临时验证被误判为永久死刑。
+            -   **配额探测成功自动解除死锁与闭环自愈**: 彻底重塑 `update_account_quota` 与 `clear_validation_blocked`，当账号在外部（如官方 IDE 或网页端）通过验证、配额探测恢复正常（`is_forbidden == false`）时，自动解除 `proxy_disabled` 禁用状态并清空历史 403 错误信息；同时触发 `trigger_account_reload` 与前端状态推送，使恢复的账号无需人工干预即可全自动重归现役代理号池。
+
     *   **v4.9.8-beta.8 (2026-10-17)**:
         -   **[对齐 Claude Code 2.1.301 协议规范、全链路请求追溯与 Claude 5 模型族] (PR #3689, Ref #3684, Ref #3686, Thanks to @cubelikeplayDaniel)**:
             -   **防 WAF 身份清洗扩展与 Agent SDK CLI 深度对齐**: 针对 `@anthropic-ai/claude-code@2.1.301` 引入的第三种复合身份提示词（Agent SDK CLI 运行时开场白：`You are Claude Code, Anthropic's official CLI for Claude, running within the Claude Agent SDK.`），在 `prompt_sanitizer.rs` 中全面扩展 `RE_WAF_TRIGGER_HEADERS` 与身份归一化清洗规则；全面识别并清洗 `cc_workload`、`cc_is_subagent`、`cc_prev_req`、`cc_prompt_id`、`cc_turn_origin` 等 2.1.301 扩展归属元数据请求头，坚决杜绝因上游 Google Cloud Code WAF 识别非白名单特征触发 429 限流风控。(PR #3689, Ref #3684, Thanks to @cubelikeplayDaniel)
