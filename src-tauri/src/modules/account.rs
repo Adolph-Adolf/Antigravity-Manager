@@ -400,6 +400,9 @@ mod tests {
             ],
             current_account_id: Some("acc-1".to_string()),
             current_target_ide: None,
+            current_classic_account_id: None,
+            current_ide_account_id: None,
+            current_agy_account_id: None,
         };
 
         // Save the index
@@ -468,6 +471,9 @@ mod tests {
             }],
             current_account_id: None,
             current_target_ide: None,
+            current_classic_account_id: None,
+            current_ide_account_id: None,
+            current_agy_account_id: None,
         };
         save_account_index_in_dir(dir.path(), &index).unwrap();
 
@@ -515,6 +521,9 @@ mod tests {
             }],
             current_account_id: Some("acc-toggle".to_string()),
             current_target_ide: None,
+            current_classic_account_id: None,
+            current_ide_account_id: None,
+            current_agy_account_id: None,
         };
         save_account_index_in_dir(dir.path(), &index).unwrap();
 
@@ -584,6 +593,9 @@ mod tests {
             }],
             current_account_id: Some("acc-drift".to_string()),
             current_target_ide: None,
+            current_classic_account_id: None,
+            current_ide_account_id: None,
+            current_agy_account_id: None,
         };
         save_account_index_in_dir(dir.path(), &index).unwrap();
 

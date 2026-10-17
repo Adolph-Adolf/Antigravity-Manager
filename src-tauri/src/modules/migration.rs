@@ -476,7 +476,10 @@ pub fn extract_oauth_state_from_file(db_path: &PathBuf) -> Result<ImportedOAuthS
         crate::modules::logger::log_info(
             "Detected new format database (antigravityUnifiedStateSync.oauthToken)",
         );
-        let (sentinel_key, oauth_info_blob) = protobuf::decode_unified_state_entry(&outer_b64)?;
+        let (sentinel_key, oauth_info_blob) = protobuf::decode_unified_state_entry_with_target(
+            &outer_b64,
+            Some("oauthTokenInfoSentinelKey"),
+        )?;
         if sentinel_key != "oauthTokenInfoSentinelKey" {
             return Err(format!("Unexpected OAuth sentinel key: {}", sentinel_key));
         }
