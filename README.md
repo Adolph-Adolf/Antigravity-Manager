@@ -301,11 +301,17 @@ env WEBKIT_DISABLE_DMABUF_RENDERER=1 ANTIGRAVITY_FORCE_WAYLAND=1 antigravity-too
 ```bash
 export ANTHROPIC_BASE_URL="http://127.0.0.1:8045"
 export ANTHROPIC_API_KEY="sk-antigravity"
-jeikcode --model claude-sonnet-4-6-thinking
+jeikcode --model claude-sonnet-4-6
 ```
 > For complete manual configuration and tuning, see the [JeikCode Integration Guide](./docs/jeikcode_integration.md).
 
 ### How to use with Claude Code CLI?
+> **Recommended Client Versions**:
+> - **Stable Production Recommendation**: `Claude Code v2.1.28x` (more permissive stream termination verification, highest resilience under network jitter);
+> - **Latest Versions Support**: `Claude Code v2.1.293 ~ v2.1.295` (requires deploying the gateway version with stream hang prevention and keepalive optimizations, see [Diagnosis Guide](./docs/CLAUDE_CODE_STREAM_DIAGNOSIS.md)).
+> 
+> Install recommended stable version: `npm install -g @anthropic-ai/claude-code@2.1.284`
+
 1. Start Antigravity service in the "API Proxy" tab.
 2. In your terminal:
 ```bash
