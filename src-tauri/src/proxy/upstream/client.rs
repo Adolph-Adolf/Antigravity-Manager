@@ -108,8 +108,7 @@ pub fn sanitize_error_for_log(error_text: &str) -> String {
 // Cloud Code v1internal endpoints (fallback order: Daily → Sandbox → Prod)
 //
 // Daily 优先 —— 它是官方 IDE 原生唯一主力端点（`language_server` 的启动参数即指向它），
-// 稳定支持思维链与工具调用；Sandbox 为沙箱备用、Prod 为生产兜底，
-// 后两者均易触发 Prod 环境的 429（Ref: Issue #1176, Issue #3523）。
+// 稳定支持思维链与工具调用；Sandbox 为沙箱备用容灾；Prod 端点因全流量必报 429 已被彻底剔除。
 //
 // [FIX Issue #3525 / PR #3526] 顺序同时是**正确性**要求，不只是可用性偏好：
 // 同一账号 / 模型 / 代理下，Sandbox 对部分地区返回**终止性 400**
@@ -117,15 +116,15 @@ pub fn sanitize_error_for_log(error_text: &str) -> String {
 // 只对 408 / 404 / 5xx 回退 → 400 不触发回退，故 Sandbox 排首位会让已验证可用的
 // Daily 永远不被尝试。Sandbox 保留为回退项、回退判定规则不变 ——
 // **不对所有 400 无条件重试**。
+#[allow(dead_code)]
 const V1_INTERNAL_BASE_URL_PROD: &str = "https://cloudcode-pa.googleapis.com/v1internal";
 const V1_INTERNAL_BASE_URL_DAILY: &str = "https://daily-cloudcode-pa.googleapis.com/v1internal";
 const V1_INTERNAL_BASE_URL_SANDBOX: &str =
     "https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal";
 
-pub const V1_INTERNAL_BASE_URL_FALLBACKS: [&str; 3] = [
+pub const V1_INTERNAL_BASE_URL_FALLBACKS: [&str; 2] = [
     V1_INTERNAL_BASE_URL_DAILY, // 优先级 1: Daily (官方 IDE 原生主力端点，毫秒级响应，稳定支持长流式与思维链)
-    V1_INTERNAL_BASE_URL_SANDBOX, // 优先级 2: Sandbox (沙箱备用，极速响应，遇地域限制秒切)
-    V1_INTERNAL_BASE_URL_PROD,  // 优先级 3: Prod (生产集群，大流式易遇 GFE 假死，作为深层兜底)
+    V1_INTERNAL_BASE_URL_SANDBOX, // 优先级 2: Sandbox (沙箱备用，极速响应，实测完美承载 100k+ 上下文，无缝容灾)
 ];
 
 /// 提取端点的主机名或规范标识，使不同 API 路径（如 :loadCodeAssist、:fetchAvailableModels、v1internal）
@@ -678,10 +677,13 @@ impl UpstreamClient {
                 let switch_delay_s = last_attempt_failed_at.map(|t| t.elapsed().as_secs_f64());
                 let attempt_start = std::time::Instant::now();
 
-                // [WATCHDOG] 端点级自适应防假死超时：当还有备用候选端点时，根据请求体体积动态计算超时（保底 15s，大请求按 256KB/s 延展），
-                // 既防止上游故障端点无响应静默挂起 56 秒阻塞链路，又防止 11MB 等超大 prompt 因 12s 误判切号而导致雪崩中断（Fixes #3506）
-                let watchdog_secs =
-                    std::cmp::max(15, (body_bytes.len() as u64) / (256 * 1024) + 15);
+                // [WATCHDOG] 端点级自适应防假死超时：流式接口保底 120s 满足大模型思维链与长上下文冷推理 (TTFT ~35s)，
+                // 普通轻量请求保底 15s 快速探活，兼顾防上游静默挂起与避免长思考被误判假死导致 429 假阳性 (Fixes #3506, Ref #3525)
+                let watchdog_secs = if method == "streamGenerateContent" {
+                    std::cmp::max(120, (body_bytes.len() as u64) / (64 * 1024) + 120)
+                } else {
+                    std::cmp::max(15, (body_bytes.len() as u64) / (256 * 1024) + 15)
+                };
                 let send_future = req_builder.send();
                 let response = if has_next {
                     match tokio::time::timeout(
@@ -1200,11 +1202,7 @@ mod tests {
     fn test_v1_internal_fallbacks_order_prioritizes_daily_over_sandbox() {
         assert_eq!(
             V1_INTERNAL_BASE_URL_FALLBACKS,
-            [
-                V1_INTERNAL_BASE_URL_DAILY,
-                V1_INTERNAL_BASE_URL_SANDBOX,
-                V1_INTERNAL_BASE_URL_PROD,
-            ]
+            [V1_INTERNAL_BASE_URL_DAILY, V1_INTERNAL_BASE_URL_SANDBOX,]
         );
     }
 
