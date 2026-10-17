@@ -364,7 +364,8 @@ pub async fn fetch_quota_with_cache(
 
                             if is_validation {
                                 let block_minutes = 10i64;
-                                let block_until = chrono::Utc::now().timestamp() + (block_minutes * 60);
+                                let block_until =
+                                    chrono::Utc::now().timestamp() + (block_minutes * 60);
                                 let _ = crate::modules::account::mark_account_validation_blocked(
                                     id,
                                     block_until,
@@ -872,10 +873,8 @@ pub async fn warm_up_all_accounts() -> Result<String, String> {
                 if let Ok(Some((id, email, token, pid, Some((fresh_quota, _))))) = handle.await {
                     // [FIX] 预热阶段检测到 403 时，区分是否属于临时验证并使用统一禁用逻辑
                     if fresh_quota.is_forbidden {
-                        let is_validation = fresh_quota
-                            .forbidden_reason
-                            .as_deref()
-                            .map_or(false, |r| {
+                        let is_validation =
+                            fresh_quota.forbidden_reason.as_deref().map_or(false, |r| {
                                 let lower = r.to_lowercase();
                                 lower.contains("validation_required")
                                     || lower.contains("verify your account")
@@ -1063,15 +1062,12 @@ pub async fn warm_up_account(account_id: &str) -> Result<String, String> {
 
     // [FIX] 预热阶段检测到 403 时，区分是否属于临时验证并使用统一禁用逻辑
     if fresh_quota.is_forbidden {
-        let is_validation = fresh_quota
-            .forbidden_reason
-            .as_deref()
-            .map_or(false, |r| {
-                let lower = r.to_lowercase();
-                lower.contains("validation_required")
-                    || lower.contains("verify your account")
-                    || lower.contains("validation_url")
-            });
+        let is_validation = fresh_quota.forbidden_reason.as_deref().map_or(false, |r| {
+            let lower = r.to_lowercase();
+            lower.contains("validation_required")
+                || lower.contains("verify your account")
+                || lower.contains("validation_url")
+        });
 
         if is_validation {
             crate::modules::logger::log_warn(&format!(

@@ -304,10 +304,17 @@ pub async fn refresh_all_quotas_internal(
     }
 
     // 发送全局刷新事件给 UI (如果需要)
-    if let Some(handle) = app_handle {
+    if let Some(handle) = app_handle.as_ref() {
         use tauri::Emitter;
         let _ = handle.emit("accounts://refreshed", ());
     }
+
+    // 经典款配额耗尽自动热切换检查与执行
+    let _ = crate::modules::auto_switch::check_and_auto_switch_classic(
+        proxy_state,
+        app_handle.as_ref(),
+    )
+    .await;
 
     Ok(stats)
 }

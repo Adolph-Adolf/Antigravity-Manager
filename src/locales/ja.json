@@ -490,7 +490,17 @@
             "refresh_interval": "更新間隔 (分)",
             "auto_sync": "現在のアカウントの自動同期",
             "auto_sync_desc": "現在アクティブなアカウントの情報を定期的に自動同期する",
-            "sync_interval": "同期間隔 (秒)"
+            "sync_interval": "同期間隔 (秒)",
+            "auto_switch_classic": "クラシック版 自動ホットスワップ",
+            "auto_switch_classic_desc": "バックグラウンド巡回時に Antigravity クラシック版の現在アカウントのクォータが閾値を下回った場合、プールから利用可能な最適アカウントへ自動で無感切り替えします。",
+            "auto_switch_threshold_label": "切り替えトリガー閾値",
+            "auto_switch_threshold_hint": "監視対象プールの残余クォータが ≤ {{pct}}% の場合に自動切り替え",
+            "auto_switch_models_label": "監視クォータプール",
+            "auto_switch_models_hint": "1つ以上選択してください。選択されたプールのいずれかが閾値を下回ると自動切り替えがトリガーされます。",
+            "auto_switch_gemini": "Gemini プール",
+            "auto_switch_gemini_desc": "Pro / Flash / 画像生成を含む",
+            "auto_switch_third_party": "サードパーティモデル",
+            "auto_switch_third_party_desc": "Claude 3.7 / 3.5 / GPT を含む"
         },
         "warmup": {
             "title": "スマートウォームアップ",

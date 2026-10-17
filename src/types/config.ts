@@ -167,6 +167,12 @@ export interface CircuitBreakerConfig {
     lock_on_zero_quota?: boolean;
 }
 
+export interface ClassicAutoSwitchConfig {
+    enabled: boolean;
+    threshold_percentage: number;
+    monitored_models: string[];
+}
+
 export interface AppConfig {
     language: string;
     theme: string;
@@ -174,6 +180,8 @@ export interface AppConfig {
     refresh_interval: number;
     auto_sync: boolean;
     sync_interval: number;
+    auto_switch_classic_depleted?: boolean; // [NEW] 兼容旧版开关
+    classic_auto_switch?: ClassicAutoSwitchConfig; // [NEW] 经典款配额自动热切换配置
     default_export_path?: string;
     antigravity_executable?: string; // [NEW] 手动指定的反重力程序路径
     antigravity_ide_executable?: string; // [NEW] 手动指定的 Antigravity IDE 程序路径

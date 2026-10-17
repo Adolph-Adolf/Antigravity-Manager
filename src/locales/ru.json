@@ -490,7 +490,17 @@
             "refresh_interval": "Интервал обновления (минуты)",
             "auto_sync": "Автосинхронизация текущего аккаунта",
             "auto_sync_desc": "Автоматически синхронизировать информацию о текущем активном аккаунте периодически",
-            "sync_interval": "Интервал синхронизации (секунды)"
+            "sync_interval": "Интервал синхронизации (секунды)",
+            "auto_switch_classic": "Авто-хотсвап для Classic",
+            "auto_switch_classic_desc": "При фоновой проверке квот Antigravity Classic, если квота текущего аккаунта падает ниже порога, автоматически и незаметно переключает на лучший доступный аккаунт из пула.",
+            "auto_switch_threshold_label": "Порог переключения",
+            "auto_switch_threshold_hint": "Переключать, если квота любого отслеживаемого пула ≤ {{pct}}%",
+            "auto_switch_models_label": "Отслеживаемые пулы квот",
+            "auto_switch_models_hint": "Выберите хотя бы один пул. Переключение сработает, если квота любого выбранного пула упадет ниже порога.",
+            "auto_switch_gemini": "Пул Gemini",
+            "auto_switch_gemini_desc": "Включает Pro / Flash / генерацию изображений",
+            "auto_switch_third_party": "Сторонние модели",
+            "auto_switch_third_party_desc": "Включает Claude 3.7 / 3.5 / GPT"
         },
         "warmup": {
             "title": "Умный разогрев",

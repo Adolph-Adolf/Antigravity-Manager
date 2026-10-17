@@ -1,6 +1,6 @@
 import { useState, useMemo } from 'react';
 import { TrendingUp, ArrowRightLeft, Zap, Laptop, Code2, Terminal } from 'lucide-react';
-import { Account, QuotaGroup, ActiveClientsStatus } from '../../types/account';
+import { Account, QuotaGroup, ActiveClientsStatus, getAccountTier } from '../../types/account';
 import { findQuotaModel } from '../../config/modelConfig';
 import { useTranslation } from 'react-i18next';
 
@@ -47,31 +47,30 @@ function getBucketPercentage(
     return null;
 }
 
-/** 
- * 计算模型综合有效配额
- * 自动识别：双桶 (取 min 短板) / 免费账号仅周桶 (取周) / 仅 5h 桶 (取 5h)
- */
-function calculateEffectiveQuota(
-    fiveHourFromModel: number | null,
-    weeklyFromGroup: number | null,
-    fiveHourFromGroup: number | null
+/** 提取指定模型类别在当前 5h 窗口内的最关键可用配额百分比 */
+function get5HourQuota(
+    category: 'gemini' | 'claude',
+    account: Account
 ): number {
-    const fiveHour = fiveHourFromGroup !== null ? fiveHourFromGroup : fiveHourFromModel;
-    const weekly = weeklyFromGroup;
-
-    // 情况 1: 双桶都存在 (Pro/Ultra 账号) -> 木桶短板 min(5h, weekly)
-    if (fiveHour !== null && weekly !== null) {
-        return Math.min(fiveHour, weekly);
+    const weeklyGroup = getBucketPercentage(account.quota?.quota_groups, category, 'weekly');
+    // 周额度耗尽熔断保护
+    if (weeklyGroup !== null && weeklyGroup <= 5) {
+        return 0;
     }
 
-    // 情况 2: 仅有周额度 (免费账号 / Free Tier) -> 直接以周额度为准
-    if (weekly !== null) {
-        return weekly;
+    const fiveHourGroup = getBucketPercentage(account.quota?.quota_groups, category, '5h');
+    if (fiveHourGroup !== null) {
+        return fiveHourGroup;
     }
 
-    // 情况 3: 仅有 5h 额度 (单桶回退) -> 以 5h 额度为准
-    if (fiveHour !== null) {
-        return fiveHour;
+    if (category === 'gemini') {
+        const pro5h = findQuotaModel(account.quota?.models, 'gemini-pro')?.percentage ?? null;
+        if (pro5h !== null) return pro5h;
+        const flash5h = findQuotaModel(account.quota?.models, 'gemini-flash')?.percentage ?? null;
+        if (flash5h !== null) return flash5h;
+    } else {
+        const claude5h = findQuotaModel(account.quota?.models, 'claude')?.percentage ?? null;
+        if (claude5h !== null) return claude5h;
     }
 
     return 0;
@@ -114,53 +113,51 @@ function BestAccounts({ accounts, currentAccountId, activeClients, onSwitch }: B
         }
     }, [targetIde, activeClients, currentAccountId]);
 
-    // 1. 获取按综合有效配额排序的列表 (排除当前客户端正在使用的账号及已禁用账号)
+    // 1. 获取按“付费账号优先 + 5h 内最多”排序的候选账号
     const geminiSorted = useMemo(() => {
         return accounts
-            .filter(a => a.id !== currentTargetAccountId && !a.disabled && !a.proxy_disabled)
+            .filter(a => a.id !== currentTargetAccountId && !a.disabled && !a.validation_blocked)
             .map(a => {
-                const pro5hModel = findQuotaModel(a.quota?.models, 'gemini-pro')?.percentage ?? null;
-                const flash5hModel = findQuotaModel(a.quota?.models, 'gemini-flash')?.percentage ?? null;
-                const weeklyGroup = getBucketPercentage(a.quota?.quota_groups, 'gemini', 'weekly');
-                const fiveHourGroup = getBucketPercentage(a.quota?.quota_groups, 'gemini', '5h');
+                const tier = getAccountTier(a);
+                const isPaid = tier === 'ultra' || tier === 'pro';
+                const quotaVal = get5HourQuota('gemini', a);
 
-                const effectivePro = calculateEffectiveQuota(pro5hModel, weeklyGroup, fiveHourGroup);
-                const effectiveFlash = calculateEffectiveQuota(flash5hModel, weeklyGroup, fiveHourGroup);
-
-                let score = Math.round(effectivePro * 0.7 + effectiveFlash * 0.3);
-                if (weeklyGroup !== null && weeklyGroup <= 5) {
-                    score = 0;
-                }
+                // 付费账号享有显著阶梯优先级 (+1000)，同梯队内按 5h 内可用配额从多到少排序
+                const rankScore = (isPaid ? 1000 : 0) + quotaVal;
 
                 return {
                     ...a,
-                    quotaVal: score,
+                    tier,
+                    isPaid,
+                    quotaVal,
+                    rankScore,
                 };
             })
             .filter(a => a.quotaVal > 0)
-            .sort((a, b) => b.quotaVal - a.quotaVal);
+            .sort((a, b) => b.rankScore - a.rankScore);
     }, [accounts, currentTargetAccountId]);
 
     const claudeSorted = useMemo(() => {
         return accounts
-            .filter(a => a.id !== currentTargetAccountId && !a.disabled && !a.proxy_disabled)
+            .filter(a => a.id !== currentTargetAccountId && !a.disabled && !a.validation_blocked)
             .map(a => {
-                const claude5hModel = findQuotaModel(a.quota?.models, 'claude')?.percentage ?? null;
-                const weeklyGroup = getBucketPercentage(a.quota?.quota_groups, 'claude', 'weekly');
-                const fiveHourGroup = getBucketPercentage(a.quota?.quota_groups, 'claude', '5h');
+                const tier = getAccountTier(a);
+                const isPaid = tier === 'ultra' || tier === 'pro';
+                const quotaVal = get5HourQuota('claude', a);
 
-                let score = calculateEffectiveQuota(claude5hModel, weeklyGroup, fiveHourGroup);
-                if (weeklyGroup !== null && weeklyGroup <= 5) {
-                    score = 0;
-                }
+                // 付费账号享有显著阶梯优先级 (+1000)，同梯队内按 5h 内可用配额从多到少排序
+                const rankScore = (isPaid ? 1000 : 0) + quotaVal;
 
                 return {
                     ...a,
-                    quotaVal: score,
+                    tier,
+                    isPaid,
+                    quotaVal,
+                    rankScore,
                 };
             })
             .filter(a => a.quotaVal > 0)
-            .sort((a, b) => b.quotaVal - a.quotaVal);
+            .sort((a, b) => b.rankScore - a.rankScore);
     }, [accounts, currentTargetAccountId]);
 
     let bestGemini = geminiSorted[0];
@@ -171,8 +168,8 @@ function BestAccounts({ accounts, currentAccountId, activeClients, onSwitch }: B
         const nextGemini = geminiSorted[1];
         const nextClaude = claudeSorted[1];
 
-        const scoreA = bestGemini.quotaVal + (nextClaude?.quotaVal || 0);
-        const scoreB = (nextGemini?.quotaVal || 0) + bestClaude.quotaVal;
+        const scoreA = bestGemini.rankScore + (nextClaude?.rankScore || 0);
+        const scoreB = (nextGemini?.rankScore || 0) + bestClaude.rankScore;
 
         if (nextClaude && (!nextGemini || scoreA >= scoreB)) {
             bestClaude = nextClaude;
@@ -283,9 +280,28 @@ function BestAccounts({ accounts, currentAccountId, activeClients, onSwitch }: B
                     <button
                         className="w-full px-3 py-2 bg-blue-600 hover:bg-blue-500 active:scale-[0.98] text-white text-xs font-semibold rounded-xl transition-all cursor-pointer shadow-md shadow-blue-900/30 dark:shadow-blue-950/50 flex items-center justify-center gap-1.5"
                         onClick={() => {
-                            let targetId = bestGeminiRender?.id;
-                            if (bestClaudeRender && (!bestGeminiRender || bestClaudeRender.claudeQuota > bestGeminiRender.geminiQuota)) {
-                                targetId = bestClaudeRender.id;
+                            let targetId: string | undefined;
+                            if (!bestGeminiRender) {
+                                targetId = bestClaudeRender?.id;
+                            } else if (!bestClaudeRender) {
+                                targetId = bestGeminiRender.id;
+                            } else {
+                                const geminiIsPaid = bestGeminiRender.isPaid;
+                                const claudeIsPaid = bestClaudeRender.isPaid;
+
+                                // 1. 付费梯队绝对优先 (Pro/Ultra 优先于 Free)
+                                if (claudeIsPaid && !geminiIsPaid) {
+                                    targetId = bestClaudeRender.id;
+                                } else if (!claudeIsPaid && geminiIsPaid) {
+                                    targetId = bestGeminiRender.id;
+                                } else {
+                                    // 2. 同梯队内，优选 5h 配额最高者
+                                    if (bestClaudeRender.claudeQuota > bestGeminiRender.geminiQuota) {
+                                        targetId = bestClaudeRender.id;
+                                    } else {
+                                        targetId = bestGeminiRender.id;
+                                    }
+                                }
                             }
 
                             if (onSwitch && targetId) {

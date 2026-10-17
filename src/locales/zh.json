@@ -511,7 +511,18 @@
             "refresh_interval": "刷新间隔（分钟）",
             "auto_sync": "自动获取当前账号",
             "auto_sync_desc": "定期自动刷新当前活动账号的信息",
-            "sync_interval": "同步间隔（分钟）"
+            "sync_interval": "同步间隔（分钟）",
+            "auto_switch_classic": "经典款自动热切换",
+            "auto_switch_classic_badge": "仅限经典款",
+            "auto_switch_classic_desc": "后台定时巡检发现经典款原生客户端当前账号配额低于阈值时，自动从账号池挑选高额度可用账号无感热切换（仅支持经典款原生客户端，IDE 款与 CLI 受官方客户端机制限制暂不支持无感热切）。",
+            "auto_switch_threshold_label": "触发换号阈值",
+            "auto_switch_threshold_hint": "任一监控算力池剩余配额 ≤ {{pct}}% 时触发自动换号",
+            "auto_switch_models_label": "监控额度池",
+            "auto_switch_models_hint": "至少选择一个，任一所选池额度低于阈值即自动换号",
+            "auto_switch_gemini": "Gemini 算力池",
+            "auto_switch_gemini_desc": "包含 Pro / Flash / 绘图",
+            "auto_switch_third_party": "第三方模型池",
+            "auto_switch_third_party_desc": "包含 Claude 3.7 / 3.5 / GPT"
         },
         "warmup": {
             "title": "7天周配额智能预热",

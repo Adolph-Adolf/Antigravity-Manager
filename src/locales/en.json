@@ -513,7 +513,18 @@
             "refresh_interval": "Refresh Interval (minutes)",
             "auto_sync": "Auto Sync Current Account",
             "auto_sync_desc": "Automatically sync current active account information periodically",
-            "sync_interval": "Sync Interval (minutes)"
+            "sync_interval": "Sync Interval (minutes)",
+            "auto_switch_classic": "Classic Auto Hot-Switch",
+            "auto_switch_classic_badge": "Classic Only",
+            "auto_switch_classic_desc": "When background inspection detects the active account quota in Antigravity Classic falls below threshold, automatically hot-switch to a healthy account from the pool (Exclusive to Classic Standalone; IDE and CLI do not support seamless hot-switching due to client architecture limitations).",
+            "auto_switch_threshold_label": "Trigger Threshold",
+            "auto_switch_threshold_hint": "Trigger switch when any monitored quota pool is ≤ {{pct}}%",
+            "auto_switch_models_label": "Monitored Quota Pools",
+            "auto_switch_models_hint": "Select at least one. Triggers switch when any selected pool falls below threshold.",
+            "auto_switch_gemini": "Gemini Pool",
+            "auto_switch_gemini_desc": "Includes Pro / Flash / Image generation",
+            "auto_switch_third_party": "Third-Party Models",
+            "auto_switch_third_party_desc": "Includes Claude 3.7 / 3.5 / GPT"
         },
         "warmup": {
             "title": "7-Day Weekly Reset Warmup",

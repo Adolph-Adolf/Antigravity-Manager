@@ -2274,16 +2274,20 @@ pub fn detect_active_clients_status() -> Result<crate::models::ActiveClientsStat
 
     let accounts = list_accounts().unwrap_or_default();
     let find_by_rt = |rt: &str| -> Option<Account> {
-        accounts.iter().find(|a| a.token.refresh_token == rt).cloned()
+        accounts
+            .iter()
+            .find(|a| a.token.refresh_token == rt)
+            .cloned()
     };
-    let find_by_id = |id: &str| -> Option<Account> {
-        accounts.iter().find(|a| a.id == id).cloned()
-    };
+    let find_by_id =
+        |id: &str| -> Option<Account> { accounts.iter().find(|a| a.id == id).cloned() };
 
     // 1. 探测 IDE 款当前账号 (state.vscdb)
     if let Ok(db_path) = crate::modules::db::get_db_path(Some("ide")) {
         if db_path.exists() {
-            if let Ok(oauth_state) = crate::modules::migration::extract_oauth_state_from_file(&db_path) {
+            if let Ok(oauth_state) =
+                crate::modules::migration::extract_oauth_state_from_file(&db_path)
+            {
                 if let Some(acc) = find_by_rt(&oauth_state.refresh_token) {
                     status.ide_account_id = Some(acc.id.clone());
                     status.ide_email = Some(acc.email);
@@ -2318,9 +2322,13 @@ pub fn detect_active_clients_status() -> Result<crate::models::ActiveClientsStat
         .and_then(|st| find_by_rt(&st.refresh_token));
 
     // 判断经典款是否为 2.0+ 原生版本（>= 2.0.0 使用 Keyring，< 2.0.0 使用 SQLite）
-    let is_classic_v2 = crate::modules::version::get_antigravity_version_with_path(Some("classic"), None)
-        .map(|v| crate::modules::version::compare_version(&v.short_version, "2.0.0") != std::cmp::Ordering::Less)
-        .unwrap_or(true);
+    let is_classic_v2 =
+        crate::modules::version::get_antigravity_version_with_path(Some("classic"), None)
+            .map(|v| {
+                crate::modules::version::compare_version(&v.short_version, "2.0.0")
+                    != std::cmp::Ordering::Less
+            })
+            .unwrap_or(true);
 
     // 3. 确定经典款当前账号
     if is_classic_v2 {
@@ -2372,7 +2380,10 @@ pub fn detect_active_clients_status() -> Result<crate::models::ActiveClientsStat
     }
 
     // Fallback if index has current_account_id and current_target_ide
-    if status.classic_account_id.is_none() && status.ide_account_id.is_none() && status.agy_account_id.is_none() {
+    if status.classic_account_id.is_none()
+        && status.ide_account_id.is_none()
+        && status.agy_account_id.is_none()
+    {
         if let Some(ref curr_id) = index.current_account_id {
             match index.current_target_ide.as_deref() {
                 Some("ide") => status.ide_account_id = Some(curr_id.clone()),

@@ -490,7 +490,17 @@
             "refresh_interval": "Intervalo de Actualización (minutos)",
             "auto_sync": "Sincronización Automática de Cuenta Actual",
             "auto_sync_desc": "Sincronizar automáticamente la información de la cuenta activa periódicamente",
-            "sync_interval": "Intervalo de Sincronización (segundos)"
+            "sync_interval": "Intervalo de Sincronización (segundos)",
+            "auto_switch_classic": "Cambio Rápido Automático en Clásico",
+            "auto_switch_classic_desc": "Cuando la inspección periódica detecta que la cuota de la cuenta actual en Antigravity Clásico cae por debajo del umbral, cambia automáticamente a la mejor cuenta disponible del grupo.",
+            "auto_switch_threshold_label": "Umbral de Activación",
+            "auto_switch_threshold_hint": "Activar cambio cuando cualquier cuota monitoreada sea ≤ {{pct}}%",
+            "auto_switch_models_label": "Grupos de Cuotas Monitoreados",
+            "auto_switch_models_hint": "Seleccione al menos uno. El cambio se activará si cualquier grupo cae por debajo del umbral.",
+            "auto_switch_gemini": "Grupo Gemini",
+            "auto_switch_gemini_desc": "Incluye Pro / Flash / Generación de imágenes",
+            "auto_switch_third_party": "Modelos de Terceros",
+            "auto_switch_third_party_desc": "Incluye Claude 3.7 / 3.5 / GPT"
         },
         "warmup": {
             "title": "Calentamiento Inteligente",

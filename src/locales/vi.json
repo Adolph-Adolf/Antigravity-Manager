@@ -490,7 +490,17 @@
             "refresh_interval": "Chu kỳ làm mới (phút)",
             "auto_sync": "Tự động cập nhật tài khoản hiện tại",
             "auto_sync_desc": "Tự động cập nhật thông tin tài khoản đang hoạt động theo chu kỳ",
-            "sync_interval": "Chu kỳ đồng bộ (giây)"
+            "sync_interval": "Chu kỳ đồng bộ (giây)",
+            "auto_switch_classic": "Tự động chuyển đổi nóng cho bản Classic",
+            "auto_switch_classic_desc": "Khi kiểm tra định kỳ phát hiện hạn mức tài khoản hiện tại của Antigravity Classic xuống dưới ngưỡng, tự động chuyển mượt mà sang tài khoản khả dụng tốt nhất trong nhóm.",
+            "auto_switch_threshold_label": "Ngưỡng kích hoạt chuyển đổi",
+            "auto_switch_threshold_hint": "Kích hoạt chuyển đổi khi bất kỳ nhóm hạn mức được theo dõi nào ≤ {{pct}}%",
+            "auto_switch_models_label": "Nhóm hạn mức theo dõi",
+            "auto_switch_models_hint": "Chọn ít nhất một nhóm. Chuyển đổi sẽ kích hoạt nếu bất kỳ nhóm nào xuống dưới ngưỡng.",
+            "auto_switch_gemini": "Nhóm Gemini",
+            "auto_switch_gemini_desc": "Bao gồm Pro / Flash / Tạo ảnh",
+            "auto_switch_third_party": "Model bên thứ ba",
+            "auto_switch_third_party_desc": "Bao gồm Claude 3.7 / 3.5 / GPT"
         },
         "warmup": {
             "title": "Làm nóng Thông minh (Smart Warmup)",

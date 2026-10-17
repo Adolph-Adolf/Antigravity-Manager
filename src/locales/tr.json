@@ -490,7 +490,17 @@
             "auto_sync": "Mevcut Hesabı Otomatik Senkronize Et",
             "auto_sync_desc": "Mevcut aktif hesap bilgilerini periyodik olarak otomatik senkronize et",
             "sync_interval": "Senkronizasyon Aralığı (saniye)",
-            "always_on": "Always On"
+            "always_on": "Always On",
+            "auto_switch_classic": "Classic Otomatik Hızlı Geçiş",
+            "auto_switch_classic_desc": "Periyodik kontrolde Antigravity Classic mevcut hesabının kotası eşiğin altına düştüğünde, havuzdaki en uygun hesaba kesintisiz otomatik geçiş yapar.",
+            "auto_switch_threshold_label": "Geçiş Tetikleme Eşiği",
+            "auto_switch_threshold_hint": "İzlenen herhangi bir kota havuzu ≤ {{pct}}% olduğunda geçişi tetikle",
+            "auto_switch_models_label": "İzlenen Kota Havuzları",
+            "auto_switch_models_hint": "En az birini seçin. Seçilen havuzlardan herhangi biri eşiğin altına düşerse geçiş tetiklenir.",
+            "auto_switch_gemini": "Gemini Havuzu",
+            "auto_switch_gemini_desc": "Pro / Flash / Görsel dahil",
+            "auto_switch_third_party": "Üçüncü Taraf Modeller",
+            "auto_switch_third_party_desc": "Claude 3.7 / 3.5 / GPT dahil"
         },
         "pinned_quota_models": {
             "title": "Sabitlenmiş Kota Modelleri",

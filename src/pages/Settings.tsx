@@ -11,6 +11,7 @@ import { copyToClipboard } from '../utils/clipboard';
 import { cn } from '../utils/cn';
 import QuotaProtection from '../components/settings/QuotaProtection';
 import SmartWarmup from '../components/settings/SmartWarmup';
+import ClassicAutoSwitch from '../components/settings/ClassicAutoSwitch';
 import { useDebugConsole } from '../stores/useDebugConsole';
 
 import { useTranslation } from 'react-i18next';
@@ -52,6 +53,12 @@ function Settings() {
         refresh_interval: 15,
         auto_sync: false,
         sync_interval: 5,
+        auto_switch_classic_depleted: false,
+        classic_auto_switch: {
+            enabled: false,
+            threshold_percentage: 0,
+            monitored_models: ['gemini', 'claude']
+        },
         proxy: {
             enabled: false,
             port: 8080,
@@ -944,42 +951,24 @@ function Settings() {
                                 </div>
                             </div>
 
-                            {/* 自动获取当前账号 */}
-                            <div className="group bg-white dark:bg-base-100 rounded-xl p-5 border border-gray-100 dark:border-base-200 hover:border-emerald-200 transition-all duration-300 shadow-sm">
-                                <div className="flex items-center justify-between">
-                                    <div className="flex items-center gap-4">
-                                        <div className="w-10 h-10 rounded-xl bg-emerald-50 dark:bg-emerald-900/20 flex items-center justify-center text-emerald-500 group-hover:bg-emerald-500 group-hover:text-white transition-all duration-300">
-                                            <User size={20} />
-                                        </div>
-                                        <div>
-                                            <div className="font-bold text-gray-900 dark:text-gray-100">{t('settings.account.auto_sync')}</div>
-                                            <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">{t('settings.account.auto_sync_desc')}</p>
-                                        </div>
-                                    </div>
-                                    <label className="relative inline-flex items-center cursor-pointer">
-                                        <input
-                                            type="checkbox"
-                                            className="sr-only peer"
-                                            checked={formData.auto_sync}
-                                            onChange={(e) => setFormData({ ...formData, auto_sync: e.target.checked })}
-                                        />
-                                        <div className="w-11 h-6 bg-gray-200 dark:bg-base-300 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-500 shadow-inner"></div>
-                                    </label>
-                                </div>
 
-                                {formData.auto_sync && (
-                                    <div className="mt-5 pt-5 border-t border-gray-50 dark:border-base-300 flex items-center gap-4 animate-in slide-in-from-top-1 duration-200">
-                                        <label className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider">{t('settings.account.sync_interval')}</label>
-                                        <input
-                                            type="number"
-                                            className="w-24 px-3 py-2 bg-gray-50 dark:bg-base-200 border border-gray-100 dark:border-base-300 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none text-sm font-bold text-emerald-600 dark:text-emerald-400"
-                                            min="1"
-                                            max="35791"
-                                            value={formData.sync_interval}
-                                            onChange={(e) => setFormData({ ...formData, sync_interval: isNaN(parseInt(e.target.value)) ? 1 : Math.min(Math.max(parseInt(e.target.value), 1), 35791) })}
-                                        />
-                                    </div>
-                                )}
+                            {/* 经典款自动热切 */}
+                            <div className="group bg-white dark:bg-base-100 rounded-xl p-5 border border-gray-100 dark:border-base-200 hover:border-violet-200 transition-all duration-300 shadow-sm">
+                                <ClassicAutoSwitch
+                                    config={formData.classic_auto_switch}
+                                    onChange={async (newConfig) => {
+                                        const newFormData = {
+                                            ...formData,
+                                            classic_auto_switch: newConfig
+                                        };
+                                        setFormData(newFormData);
+                                        try {
+                                            await saveConfig(newFormData);
+                                        } catch (error) {
+                                            showToast(`${t('common.error')}: ${error}`, 'error');
+                                        }
+                                    }}
+                                />
                             </div>
 
                             {/* 7天周配额智能预热 (Smart Warmup) */}

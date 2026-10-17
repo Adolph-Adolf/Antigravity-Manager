@@ -488,7 +488,17 @@
             "refresh_interval": "فاصل التحديث (دقائق)",
             "auto_sync": "مزامنة تلقائية للحساب الحالي",
             "auto_sync_desc": "مزامنة معلومات الحساب النشط الحالي بشكل دوري",
-            "sync_interval": "فاصل المزامنة (ثواني)"
+            "sync_interval": "فاصل المزامنة (ثواني)",
+            "auto_switch_classic": "التبديل التلقائي السريع للنسخة الكلاسيكية",
+            "auto_switch_classic_desc": "عندما يكشف الفحص الدوري أن حصة الحساب الحالي في Antigravity Classic انخفضت عن الحد الأدنى، يتم التبديل تلقائيًا وبسلاسة إلى أفضل حساب متاح في المجموعة.",
+            "auto_switch_threshold_label": "حد بدء التبديل",
+            "auto_switch_threshold_hint": "بدء التبديل عندما تكون أي حصة مراقبة ≤ {{pct}}%",
+            "auto_switch_models_label": "مجموعات الحصص المراقبة",
+            "auto_switch_models_hint": "اختر واحدة على الأقل. سيتم التبديل إذا انخفضت أي مجموعة عن الحد.",
+            "auto_switch_gemini": "مجموعة Gemini",
+            "auto_switch_gemini_desc": "يشمل Pro / Flash / توليد الصور",
+            "auto_switch_third_party": "نماذج الطرف الثالث",
+            "auto_switch_third_party_desc": "يشمل Claude 3.7 / 3.5 / GPT"
         },
         "warmup": {
             "title": "تنشيط ذكي",

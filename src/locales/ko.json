@@ -490,7 +490,17 @@
             "refresh_interval": "새로고침 간격 (분)",
             "auto_sync": "현재 계정 자동 동기화",
             "auto_sync_desc": "현재 활성 계정 정보를 주기적으로 자동 동기화",
-            "sync_interval": "동기화 간격 (분)"
+            "sync_interval": "동기화 간격 (분)",
+            "auto_switch_classic": "클래식 버전 자동 핫스왑",
+            "auto_switch_classic_desc": "백그라운드 점검 시 Antigravity 클래식 버전의 현재 계정 할당량이 임계값 이하로 떨어지면, 계정 풀에서 사용 가능한 최적의 계정으로 무중단 자동 전환합니다.",
+            "auto_switch_threshold_label": "전환 트리거 임계값",
+            "auto_switch_threshold_hint": "모니터링 중인 풀의 잔여 할당량이 ≤ {{pct}}% 일 때 자동 전환",
+            "auto_switch_models_label": "모니터링 할당량 풀",
+            "auto_switch_models_hint": "최소 하나 이상 선택하세요. 선택한 풀 중 하나라도 임계값 이하로 떨어지면 자동 전환됩니다.",
+            "auto_switch_gemini": "Gemini 연산 풀",
+            "auto_switch_gemini_desc": "Pro / Flash / 이미지 생성 포함",
+            "auto_switch_third_party": "타사 모델 풀",
+            "auto_switch_third_party_desc": "Claude 3.7 / 3.5 / GPT 포함"
         },
         "warmup": {
             "title": "스마트 웜업",

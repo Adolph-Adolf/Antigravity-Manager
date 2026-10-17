@@ -4,10 +4,20 @@
 
 *   **版本演进**:
     *   **v4.9.8-beta.9 (2026-10-17)**:
+        -   **[剔除不可用 Prod 端点并放宽流式首包看门狗超时至 120s] (PR #3691, Fixes #3506, Ref #3525, Thanks to @EricZhou05)**:
+            -   **剔除 100% 报 429 的 Prod 生产公共端点**: 经全规模对照实测，Prod 生产端点（`cloudcode-pa.googleapis.com`）对该接口全上下文规模均在 1 秒左右必然返回 `429 RESOURCE_EXHAUSTED`，无法作为有效 fallback，切过去只会引发假阳性限流并触发账号禁用死循环。在 `V1_INTERNAL_BASE_URL_FALLBACKS` 中彻底剔除 Prod 端点，仅保留官方原生主力 `Daily` 与实测可用的备用 `Sandbox` 双端点容灾，切断流向必死 Prod 的自杀通道。(PR #3691, Ref #3525, Thanks to @EricZhou05)
+            -   **校准流式接口自适应防假死首包超时门槛至 120 秒**: 修复早期看门狗超时公式 `max(15, body_len / 256KB + 15)` 仅考虑网络带宽而忽略「大模型长上下文 + Thinking 深度思考首字生成 (TTFT)」导致 16 秒误判假死掐断的问题。将流式接口（`streamGenerateContent`）首包超时保底放宽至 120 秒（`max(120, body_len / 64KB + 120)`），充分保障大模型冷缓存预热与思考链推理时间，杜绝长会话被反代误杀切入 429 与 503 假阳性；非流式普通请求维持 15 秒快速探活回退。(PR #3691, Fixes #3506, Thanks to @EricZhou05)
+        -   **[Chat Completions 对齐 Responses 格式多轮角色保留与结构化转换] (PR #3672, Fixes #3671, Thanks to @blackdm666)**:
+            -   **Responses 格式数组 input 完整保留多轮对话角色**: 解决 `/v1/chat/completions` 接收仅带 `instructions` / `input` 而无 `messages` 的 Responses 格式请求时，原实现将数组形式的 `input` 强行 `to_string()` 为单条 user 文本导致丢失 system / user / assistant 角色边界、引发 Gemini 上游把整段历史当新问题重答的缺陷。改为无缝复用 `convert_codex_to_openai_request` 结构化转换器，按条目精确还原各轮次角色，并兼容字符串格式 input 输入。(PR #3672, Fixes #3671, Thanks to @blackdm666)
         -   **[403 状态智能识别、上游操作指引提取与全自动闭环自愈] (Ref #3630, Ref #3684)**:
             -   **403 报文体全量捕获与动作链接提取 (validation_url / appeal_url)**: 在配额探测模块（`modules/quota.rs`）中根除 403 立即丢弃响应体的缺陷；全量读取 Google RPC 错误详情报文，通过新增的 `extract_action_url` 精准解析 `details.metadata` 中的 `validation_url`（人机/安全验证链接）与 `appeal_url`（服务条款申诉链接）并持久化至账号模型。配合前端 `AccountErrorDialog`，即时点亮「点击去验证」、「复制验证链接」或「前往申诉」交互按钮，彻底告别空洞抽象的单一 403 报错状态。
             -   **临时人机验证 (VALIDATION_REQUIRED) 与永久封禁严格解耦**: 在 Gemini、Claude 与 OpenAI 协议网关（`handlers/gemini.rs`、`handlers/claude.rs`、`handlers/openai.rs`）及预热检测中，将临时人机验证与永久封禁（`set_forbidden`）改造为严格互斥逻辑。发生 `VALIDATION_REQUIRED` 时仅进入 10 分钟观察窗口并记录验证链接，不再强行写入永久 `proxy_disabled = true`，杜绝临时验证被误判为永久死刑。
             -   **配额探测成功自动解除死锁与闭环自愈**: 彻底重塑 `update_account_quota` 与 `clear_validation_blocked`，当账号在外部（如官方 IDE 或网页端）通过验证、配额探测恢复正常（`is_forbidden == false`）时，自动解除 `proxy_disabled` 禁用状态并清空历史 403 错误信息；同时触发 `trigger_account_reload` 与前端状态推送，使恢复的账号无需人工干预即可全自动重归现役代理号池。
+        -   **[经典款配额自动无感热切换、双核算力池监控与冗余同步清理] (Ref #3509)**:
+            -   **经典款配额耗尽/低于阈值全自动无感热切**: 在后台配额巡检流水线（`refresh_all_quotas_internal`）中接入自动热切引擎；当检测到 Antigravity 经典款当前正在运行且活动账号配额低于预设阈值时，自动在账号池中按「满足阈值门槛 + 付费等级优先 (Pro/Ultra > Free) + 可用配额更多 + LRU 防震荡」挑选最佳可用账号。通过精准终止后台 `language_server` 子进程并自动更新系统 Keyring，由内置 supervisor 在 2 秒内原地无感重启生效，并附带 120 秒冷却锁与系统桌面通知。 (Ref #3509)
+            -   **极简双核算力池监控与阈值调节**: 彻底告别繁复密集的细分子模型标签，与仪表盘配额体系深度对齐，提供「Gemini 算力池 (Pro / Flash / 绘图)」与「第三方模型池 (Claude 3.7 / 3.5 / GPT)」两大核心池多选卡片；支持用户自定义 0% ~ 99% 换号触发阈值。
+            -   **清理冗余的账号同步轮询与界面精简**: 彻底移除设置页中容易引起与“自动刷新配额”混淆的历史老旧功能「自动获取当前账号」配置卡片，同步清理前端无效定时器，保持账号设置页聚焦整洁。
+            -   **全量 12 种多国语言覆盖**: 经典款自动热切相关文案完整覆盖中文（简/繁）、英文、韩文、日文、俄文、西文、葡文、土文、越文、阿文、马文等全部 12 种语言。
         -   **[本地账号扫描全链路对齐与旧版备份移除]**:
             -   **精简移除旧版 V1 备份与界面轻量化**: 在新增账号弹窗中彻底移除早期 V1 版本（`~/.antigravity-agent`）冗余导入入口与分割线，将界面聚焦并精简为「自动扫描本地已登录账号」与「从自定义 DB 导入」，同步优化多语言文案与布局空间。
             -   **经典款与 IDE 款数据库候选全量聚合 (state.vscdb)**: 新增 `db::get_all_antigravity_db_paths()`，破除先前导入扫描仅检索经典款 `Antigravity` 的限制；支持无缝并发聚合经典款与 Antigravity IDE（含 `antigravity-ide` 变体）所有活动数据库实例，彻底解决 IDE 款已登录账号被静默漏检的问题。
