@@ -3,6 +3,30 @@
 > 完整版本历史记录。返回项目主页请查看 [README_ZH.md](README_ZH.md) | [English Changelog](CHANGELOG_EN.md)。
 
 *   **版本演进**:
+    *   **v4.9.9-beta.1 (2026-10-18)**:
+        -   **[代理池安全防泄露、URL 凭据清洗与高延迟节点容灾] (Fixes #3703, Ref #3323, PR #3706, Thanks to @cubelikeplayDaniel)**:
+            -   **专属绑定账号防 Direct 泄漏机制**: 重构专属代理路由决策；当绑定的专属代理被判定为不健康时，优先故障转移至可用公用池节点；若无可用公共节点，强制沿用专属代理尝试出站（宁可网络报错也绝不静默回退至直连），彻底杜绝服务器真实源站 IP 泄漏至 Google 授权系统导致的风控封号风险。(Fixes #3703, PR #3706, Thanks to @cubelikeplayDaniel)
+            -   **WHATWG URL 凭据清理顺序规范化与密文防扩散**: 严格对齐标准 URL 规范，采用先清除密码再清除用户名的安全清洗顺序，兼容 HTTP/HTTPS 及 SOCKS5h 代理；当容器跨机器迁移导致解密失败（保留 `ag_enc_` 前缀）时，拒绝将密文字节随 HTTP CONNECT 报头明文发送给代理服务器。(PR #3706, Thanks to @cubelikeplayDaniel)
+            -   **健康检查握手超时放宽**: 将代理健康检查 TCP 连接超时由 5s 放宽至 10s，整体超时调整至 15s，杜绝跨国多跳代理节点在建立 TLS 隧道阶段因严格超时误报失败。(PR #3706, Thanks to @cubelikeplayDaniel)
+        -   **[Gemini 上游协议严苛合规、工具拓扑保序与 SQLite 思考检索修复] (Fixes #3695, PR #3696, Thanks to @cubelikeplayDaniel)**:
+            -   **多轮对话角色严格交替合规 (user <-> model)**: 自愈续跑与媒体切分时引入状态机，在上一轮为 user 时就地合并续跑提示词与 parts，防止生成紧邻的连续两个 user 轮次 `[..., user, user]` 触发 Google 上游 400 校验拦截。(Fixes #3695, PR #3696, Thanks to @cubelikeplayDaniel)
+            -   **原生与函数工具声明拓扑保序**: 修复函数拆分时延后追加导致的顺序颠倒问题，严格保留客户端传入的自定义工具与 GoogleSearch、CodeExecution 等原生工具的原生相对优先级。(Fixes #3695, PR #3696, Thanks to @cubelikeplayDaniel)
+            -   **模型感知降级限流校验**: `has_available_account` 补充目标模型校验与 `QuotaExhausted` 锁检查，确保模型配额用尽时精准触发外部提供商无感降级。(Fixes #3695, PR #3696, Thanks to @cubelikeplayDaniel)
+            -   **流式管道尾部防重终结**: 在冲刷尾部残留缓冲后增加终端态检查，严禁向客户端重复发射 `[DONE]` 帧或 `message_stop` 事件导致客户端解析异常。(Fixes #3695, PR #3696, Thanks to @cubelikeplayDaniel)
+            -   **SQLite GZIP 压缩思维链内存解包检索**: 针对大于 128 字节以 GZIP 存入 BLOB 的历史思考记录，改用内存解包进行精准子串匹配，解决 SQL `LIKE` 对压缩二进制检索失效的问题。(Fixes #3695, PR #3696, Thanks to @cubelikeplayDaniel)
+        -   **[countTokens 信封规整、全局思考预算继承与 Token 预估签名补全] (Ref #3697, PR #3702, PR #3705, Thanks to @cubelikeplayDaniel)**:
+            -   **Google countTokens 专属顶层信封清洗**: 引入 `align_count_tokens_envelope`，对 Google v1internal `:countTokens` 请求剥离外层 `project`、`model`、`userAgent` 及内层 `safetySettings`，杜绝顶层信封污染引发上游 400 Bad Request 报错。(Ref #3697, PR #3702, Thanks to @cubelikeplayDaniel)
+            -   **全局思考预算配置 (effort) 继承生效**: 修复 `resolve_custom_budget` 继承链，当客户端请求未显式传参时，Bare Flash 与 Tiered 模型优先继承用户在网关全局配置的思考档位（low / medium / high），防止无上限自适应思考消耗。(Ref #3697, PR #3702, Thanks to @cubelikeplayDaniel)
+            -   **PipelineTokenEstimator 补全工具思考签名统计**: 在预估 Claude 协议的 `tool_use` 与 `server_tool_use` 块时，提取隐式思考签名（`signature` / `thoughtSignature`）并累加至总 Tokens，解决 100+ 轮深度工具交互下预估严重偏小穿透 200k 自动压缩阈值的缺陷。(Ref #3697, PR #3705, Thanks to @cubelikeplayDaniel)
+        -   **[上游终端端点看门狗超时全覆盖与孤儿工具结果安全降级] (Ref #3697, PR #3701, Thanks to @cubelikeplayDaniel)**:
+            -   **终端端点与单端点自适应看门狗保护**: 移除仅在非末位端点开启超时的限制，对所有候选端点（包含最后一个端点与单端点场景）全量施加 `tokio::time::timeout` 保护，杜绝上游静默挂起导致连接池长久悬挂。(Ref #3697, PR #3701, Thanks to @cubelikeplayDaniel)
+            -   **孤儿工具结果回退标识合规化**: 当 Claude 客户端发来无对应 `tool_use` 的孤儿 `tool_result` 时，将回退函数名统一规整为 `"unknown"`，触发管道 Pass 3 自愈并安全降级为用户提示文本块，防止带连字符的原始 ID 触发 Vertex 400 正则校验失败。(Ref #3697, PR #3701, Thanks to @cubelikeplayDaniel)
+        -   **[会话指纹多模态雪崩消除、短输入连续性与 Responses 并发守卫] (Ref #3697, PR #3699, PR #3700, Thanks to @cubelikeplayDaniel)**:
+            -   **单字符短输入 (`"1"`, `"y"`) 多轮指纹稳定**: 放宽文本指纹提取阈值，杜绝极短输入退化为整包 Body 哈希导致第二轮追问时会话 ID 发生漂移。(Ref #3697, PR #3700, Thanks to @cubelikeplayDaniel)
+            -   **多模态纯图片输入元数据特征摘要**: 提取图片/音频元数据特征生成会话种子，防止对数兆 Base64 全量序列化引发哈希雪崩与内存激增。(Ref #3697, PR #3700, Thanks to @cubelikeplayDaniel)
+            -   **未闭合 System 标签截断保护**: 修复前缀清洗边界检查，杜绝将用户代码中的合法标识符（如 `[System.IO.File]`）误判为注入标签导致后续正文被粗暴截断清空。(Ref #3697, PR #3700, Thanks to @cubelikeplayDaniel)
+            -   **OpenAI handle_completions 在途并发守卫与别名标准化**: 为非流式及流式 completions 统一托管 RAII Drop Guard，消除“幽灵并发”泄露；标准化 `/responses` 及 `/responses/compact` 别名路由映射。(Ref #3697, PR #3699, Thanks to @cubelikeplayDaniel)
+
     *   **v4.9.8 (2026-10-17)**:
         -   **[经典款独占配额自动无感热切换、双核算力池监控与冗余同步清理] (Ref #3509, Ref #3671, Ref #3684)**:
             -   **经典款配额耗尽/低于阈值全自动无感热切 (仅限原生经典版)**: 在后台配额巡检流水线（`refresh_all_quotas_internal`）中接入自动热切引擎；当检测到 Antigravity 经典款当前正在运行且活动账号配额低于预设阈值时，自动在账号池中按「满足阈值门槛 + 付费等级优先 (Pro/Ultra > Free) + 可用配额更多 + LRU 防震荡」挑选最佳可用账号。利用经典款由内置 supervisor 原地拉起 `language_server` 并继承 Keyring 凭据的特性，在 2 秒内无感完成热切换，附带 120 秒冷却锁与系统桌面通知。(Ref #3509)
