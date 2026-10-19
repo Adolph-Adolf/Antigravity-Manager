@@ -53,11 +53,23 @@ jobs:
           $config | ConvertTo-Json -Depth 32 | Set-Content -Path $configPath -Encoding UTF8
           Write-Host "No updater signing key configured; disabled updater artifacts for this build."
 
+      - name: Check prerelease version for Windows bundles
+        shell: pwsh
+        run: |
+          $pkg = Get-Content package.json | ConvertFrom-Json
+          if ($pkg.version -match '-') {
+            Write-Host "Prerelease version ($($pkg.version)) detected; MSI (WiX) cannot bundle SemVer prerelease versions. Falling back to NSIS only."
+            "BUNDLE_ARGS=--bundles nsis" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          } else {
+            Write-Host "Stable release ($($pkg.version)); building default bundles."
+            "BUNDLE_ARGS=" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          }
+
       - name: Build the app
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        run: npm run tauri build -- ${{ matrix.args }}
+        run: npm run tauri build -- ${{ matrix.args }} ${{ env.BUNDLE_ARGS }}
 
       # 1. 上传 updater.json 到 Artifacts (供后续合并使用)
       - name: Upload updater json
