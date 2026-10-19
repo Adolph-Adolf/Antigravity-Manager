@@ -1,5 +1,5 @@
 import { useState, useEffect, startTransition } from 'react';
-import { Save, Github, User, MessageCircle, ExternalLink, RefreshCw, Heart, Coffee, LayoutDashboard, Users, Network, Activity, BarChart3, Settings as SettingsIcon, Lock, CheckCircle2, Globe, Send, KeyRound, Copy, Check } from 'lucide-react';
+import { Save, Github, User, MessageCircle, ExternalLink, RefreshCw, Heart, Coffee, LayoutDashboard, Users, Network, Activity, BarChart3, Settings as SettingsIcon, Lock, CheckCircle2, Globe, Send, Copy, Check } from 'lucide-react';
 import { request as invoke } from '../utils/request';
 import { open } from '@tauri-apps/plugin-dialog';
 import { useConfigStore } from '../stores/useConfigStore';
@@ -105,7 +105,8 @@ function Settings() {
             enabled: false,
             backoff_steps: [30, 60, 120, 300, 600]
         },
-        hidden_menu_items: [],  // 菜单显示设置：默认不隐藏任何菜单�?
+        hidden_menu_items: [],  // 菜单显示设置：默认不隐藏任何菜单项
+
     });
 
     // Dialog state
@@ -146,7 +147,8 @@ function Settings() {
     useEffect(() => {
         loadConfig();
 
-        // 获取当前 Hub 客户端指�?        invoke<HubFingerprint>('get_hub_fingerprint')
+        // 获取当前 Hub 客户端指纹
+        invoke<HubFingerprint>('get_hub_fingerprint')
             .then(fp => setHubFingerprint(fp))
             .catch(err => console.error('Failed to get hub fingerprint:', err));
 
@@ -167,19 +169,21 @@ function Settings() {
             })
             .catch(err => console.error('Failed to load update settings:', err));
 
-        // 获取真实的开机自启状�?        invoke<boolean>('is_auto_launch_enabled')
+        // 获取真实的开机自启状态
+        invoke<boolean>('is_auto_launch_enabled')
             .then(enabled => {
                 setFormData(prev => ({ ...prev, auto_launch: enabled }));
             })
             .catch(err => console.error('Failed to get auto launch status:', err));
 
-        // 获取应用真实版本�?        if (isTauri()) {
+        // 获取应用真实版本号
+        if (isTauri()) {
             import('@tauri-apps/api/app').then(({ getVersion }) => {
                 getVersion().then(v => setAppVersion(v)).catch(() => {});
             });
         }
 
-        // 检测是否通过 Homebrew Cask 安装 (�?Tauri 环境)
+        // 检测是否通过 Homebrew Cask 安装 (仅 Tauri 环境)
         if (isTauri()) {
             invoke<boolean>('check_homebrew_installation')
                 .then(installed => setIsBrewInstalled(installed))
@@ -198,7 +202,8 @@ function Settings() {
 
     const handleSave = async () => {
         try {
-            // 校验：如果启用了上游代理但没有填写地址，给出提�?            const proxyEnabled = formData.proxy?.upstream_proxy?.enabled;
+            // 校验：如果启用了上游代理但没有填写地址，给出提示
+            const proxyEnabled = formData.proxy?.upstream_proxy?.enabled;
             const proxyUrl = formData.proxy?.upstream_proxy?.url?.trim();
             if (proxyEnabled && !proxyUrl) {
                 showToast(t('proxy.config.upstream_proxy.validation_error'), 'error');
@@ -208,11 +213,13 @@ function Settings() {
             await saveConfig(formData);
             showToast(t('common.saved'), 'success');
 
-            // 刷新当前 Hub 指纹状�?            invoke<HubFingerprint>('get_hub_fingerprint')
+            // 刷新当前 Hub 指纹状态
+            invoke<HubFingerprint>('get_hub_fingerprint')
                 .then(fp => setHubFingerprint(fp))
                 .catch(() => {});
 
-            // 如果修改了代理配置，提示用户需要重�?            if (proxyEnabled && proxyUrl) {
+            // 如果修改了代理配置，提示用户需要重启
+            if (proxyEnabled && proxyUrl) {
                 showToast(t('proxy.config.upstream_proxy.restart_hint'), 'info');
             }
         } catch (error) {
@@ -232,7 +239,7 @@ function Settings() {
                 t('proxy.config.hub.detect_success', {
                     version: fp.version,
                     cl: fp.cl,
-                    defaultValue: `已成功探测并同步官方最�?Hub: v${fp.version} (CL: ${fp.cl})`
+                    defaultValue: `已成功探测并同步官方最新 Hub: v${fp.version} (CL: ${fp.cl})`
                 }),
                 'success'
             );
@@ -525,7 +532,7 @@ function Settings() {
             className="h-full w-full overflow-y-auto"
         >
             <div className="p-5 space-y-4 max-w-7xl mx-auto">
-                {/* 顶部工具栏：Tab 导航和保存按�?*/}
+                {/* 顶部工具栏：Tab 导航和保存按钮 */}
                 <div className="flex justify-between items-center">
                     {/* Tab 导航 - 采用顶部导航栏样式：外层灰色容器 */}
                     <div className="flex items-center gap-1 bg-gray-100 dark:bg-base-200 rounded-full p-1 w-fit">
@@ -613,14 +620,14 @@ function Settings() {
                                         updateLanguage(newLang);
                                     }}
                                 >
-                                    <option value="zh">简体中�?/option>
+                                    <option value="zh">简体中文</option>
                                     <option value="zh-TW">繁體中文</option>
                                     <option value="en">English</option>
-                                    <option value="ja">日本�?/option>
+                                    <option value="ja">日本語</option>
                                     <option value="tr">Türkçe</option>
                                     <option value="vi">Tiếng Việt</option>
                                     <option value="pt">Português</option>
-                                    <option value="ko">한국�?/option>
+                                    <option value="ko">한국어</option>
                                     <option value="ru">Русский</option>
                                     <option value="ar">العربية</option>
                                     <option value="es">Español</option>
@@ -646,13 +653,13 @@ function Settings() {
                                 </select>
                             </div>
 
-                            {/* 开机自动启�?*/}
+                            {/* 开机自动启动 */}
                             <div>
                                 <div className="flex justify-between items-center mb-2">
                                     <label className="block text-sm font-medium text-gray-900 dark:text-base-content">{t('settings.general.auto_launch')}</label>
                                     {!isTauri() && (
                                         <span className="text-xs text-orange-500 dark:text-orange-400">
-                                            {t('settings.web_mode_limitation', '(Web 模式不支�?')}
+                                            {t('settings.web_mode_limitation', '(Web 模式不支持)')}
                                         </span>
                                     )}
                                 </div>
@@ -708,7 +715,7 @@ function Settings() {
                                 </div>
                             )}
 
-                            {/* 自动检查更�?*/}
+                            {/* 自动检查更新 */}
                             <>
                                 <div className="flex items-center justify-between p-4 bg-gray-50 dark:bg-base-200 rounded-lg border border-gray-100 dark:border-base-300">
                                     <div>
@@ -741,7 +748,7 @@ function Settings() {
                                     </label>
                                 </div>
 
-                                {/* 检查间�?*/}
+                                {/* 检查间隔 */}
                                 {formData.auto_check_update && (
                                     <div className="ml-4">
                                         <label className="block text-sm font-medium text-gray-900 dark:text-base-content mb-2">{t('settings.general.update_check_interval')}</label>
@@ -805,7 +812,6 @@ function Settings() {
                                             { path: '/', label: t('nav.dashboard'), icon: LayoutDashboard },
                                             { path: '/accounts', label: t('nav.accounts'), icon: Users },
                                             { path: '/api-proxy', label: t('nav.proxy'), icon: Network },
-                                            { path: '/apikey-fun', label: t('nav.apikey_fun', '中转�?), icon: KeyRound },
                                             { path: '/monitor', label: t('nav.call_records'), icon: Activity },
                                             { path: '/token-stats', label: t('nav.token_stats'), icon: BarChart3 },
                                             { path: '/user-token', label: t('nav.user_token', 'User Tokens'), icon: Users },
@@ -945,7 +951,7 @@ function Settings() {
                             </div>
 
 
-                            {/* 经典款自动热�?*/}
+                            {/* 经典款自动热切 */}
                             <div className="group bg-white dark:bg-base-100 rounded-xl p-5 border border-gray-100 dark:border-base-200 hover:border-violet-200 transition-all duration-300 shadow-sm">
                                 <ClassicAutoSwitch
                                     config={formData.classic_auto_switch}
@@ -992,7 +998,7 @@ function Settings() {
                                         const updates: any = {
                                             quota_protection: newConfig
                                         };
-                                        // 联动逻辑：开启配额保护时，强制开启后台自动刷�?(不仅仅是预热)
+                                        // 联动逻辑：开启配额保护时，强制开启后台自动刷新 (不仅仅是预热)
                                         if (newConfig.enabled) {
                                             updates.auto_refresh = true;
                                         }
@@ -1046,7 +1052,7 @@ function Settings() {
                                             </button>
                                         ) : (
                                             <span className="self-center text-xs text-gray-400 dark:text-gray-500 italic px-2">
-                                                {t('settings.web_mode_limitation', '(Web 模式不支�?')}
+                                                {t('settings.web_mode_limitation', '(Web 模式不支持)')}
                                             </span>
                                         )}
                                     </div>
@@ -1081,14 +1087,14 @@ function Settings() {
                                             </>
                                         ) : (
                                             <span className="self-center text-xs text-gray-400 dark:text-gray-500 italic px-2">
-                                                {t('settings.web_mode_limitation', '(Web 模式不支�?')}
+                                                {t('settings.web_mode_limitation', '(Web 模式不支持)')}
                                             </span>
                                         )}
                                     </div>
                                     <p className="text-sm text-gray-500 dark:text-gray-400 mt-2">{t('settings.advanced.data_dir_desc')}</p>
                                 </div>
 
-                                {/* 反重力程序路�?*/}
+                                {/* 反重力程序路径 */}
                                 <div>
                                     <label className="block text-sm font-medium text-gray-900 dark:text-base-content mb-1">
                                         {t('settings.advanced.antigravity_path')}
@@ -1124,7 +1130,7 @@ function Settings() {
                                             </button>
                                         ) : (
                                             <span className="self-center text-xs text-gray-400 dark:text-gray-500 italic px-2">
-                                                {t('settings.web_mode_limitation', '(Web 模式不支�?')}
+                                                {t('settings.web_mode_limitation', '(Web 模式不支持)')}
                                             </span>
                                         )}
                                     </div>
@@ -1143,7 +1149,7 @@ function Settings() {
                                             type="text"
                                             className="flex-1 px-4 py-4 border border-gray-200 dark:border-base-300 rounded-lg bg-gray-50 dark:bg-base-200 text-gray-900 dark:text-base-content font-medium"
                                             value={formData.antigravity_cli_executable || ''}
-                                            placeholder={t('settings.advanced.antigravity_cli_path_placeholder', '未设�?(将使用自动探�?')}
+                                            placeholder={t('settings.advanced.antigravity_cli_path_placeholder', '未设置 (将使用自动探测)')}
                                             onChange={(e) => setFormData({ ...formData, antigravity_cli_executable: e.target.value })}
                                         />
                                         {formData.antigravity_cli_executable && (
@@ -1169,23 +1175,23 @@ function Settings() {
                                             </button>
                                         ) : (
                                             <span className="self-center text-xs text-gray-400 dark:text-gray-500 italic px-2">
-                                                {t('settings.web_mode_limitation', '(Web 模式不支�?')}
+                                                {t('settings.web_mode_limitation', '(Web 模式不支持)')}
                                             </span>
                                         )}
                                     </div>
                                     <p className="text-sm text-gray-500 dark:text-gray-400 mt-2">
-                                        {t('settings.advanced.antigravity_cli_path_desc', '设置您的命令行客户端 (agy) 的可执行文件路径，用于一键解除账号限制�?)}
+                                        {t('settings.advanced.antigravity_cli_path_desc', '设置您的命令行客户端 (agy) 的可执行文件路径，用于一键解除账号限制。')}
                                     </p>
                                     
-                                    {/* 新增：解�?修补准入限制一键修补按�?*/}
+                                    {/* 新增：解密/修补准入限制一键修补按钮 */}
                                     <div className={`mt-3 flex items-center gap-4 p-3 rounded-lg border ${formData.antigravity_cli_executable ? 'bg-blue-50 dark:bg-blue-950/20 border-blue-100 dark:border-blue-900/30' : 'bg-gray-50 dark:bg-gray-800 border-gray-200 dark:border-gray-700'}`}>
                                         <div className="flex-1">
                                             <h4 className={`text-sm font-semibold ${formData.antigravity_cli_executable ? 'text-blue-900 dark:text-blue-200' : 'text-gray-500 dark:text-gray-400'}`}>
                                                 {t('settings.advanced.patch_eligibility_title', '账号准入限制解除')}
                                             </h4>
                                             <p className={`text-xs mt-0.5 ${formData.antigravity_cli_executable ? 'text-blue-700 dark:text-blue-300/80' : 'text-gray-400 dark:text-gray-500'}`}>
-                                                {t('settings.advanced.patch_eligibility_desc', '新版 agy 二进制强制拦截未授权账号，此操作一键跳过本地准入拦截检查�?)}
-                                                {!formData.antigravity_cli_executable && " (需先在上方设置或探测路�?"}
+                                                {t('settings.advanced.patch_eligibility_desc', '新版 agy 二进制强制拦截未授权账号，此操作一键跳过本地准入拦截检查。')}
+                                                {!formData.antigravity_cli_executable && " (需先在上方设置或探测路径)"}
                                             </p>
                                         </div>
                                         <button
@@ -1201,7 +1207,7 @@ function Settings() {
                                                 }
                                             }}
                                         >
-                                            {t('settings.advanced.patch_btn', '一键解�?)}
+                                            {t('settings.advanced.patch_btn', '一键解除')}
                                         </button>
                                     </div>
                                 </div>
@@ -1236,7 +1242,7 @@ function Settings() {
                                             </button>
                                         ) : (
                                             <span className="self-center text-xs text-gray-400 dark:text-gray-500 italic px-2">
-                                                {t('settings.web_mode_limitation', '(Web 模式不支�?')}
+                                                {t('settings.web_mode_limitation', '(Web 模式不支持)')}
                                             </span>
                                         )}
                                     </div>
@@ -1245,7 +1251,7 @@ function Settings() {
                                     </p>
                                 </div>
 
-                                {/* 反重力程序启动参�?*/}
+                                {/* 反重力程序启动参数 */}
                                 <div>
                                     <label className="block text-sm font-medium text-gray-900 dark:text-base-content mb-1">
                                         {t('settings.advanced.antigravity_args')}
@@ -1281,14 +1287,14 @@ function Settings() {
                                     </p>
                                 </div>
 
-                                {/* 官方 Hub 客户端指纹与动态探�?*/}
+                                {/* 官方 Hub 客户端指纹与动态探测 */}
                                 <div className="border-t border-gray-200 dark:border-base-200 pt-4">
                                     <div className="flex items-center justify-between mb-2">
                                         <div className="flex items-center gap-2">
                                             <h3 className="font-medium text-gray-900 dark:text-base-content">
-                                                {t('proxy.config.hub.title', { defaultValue: '官方 Hub 客户端指�? })}
+                                                {t('proxy.config.hub.title', { defaultValue: '官方 Hub 客户端指纹' })}
                                             </h3>
-                                            <HelpTooltip text={t('proxy.config.hub.tooltip', { defaultValue: '出站流量对齐 Google 官方 Antigravity Hub 原生客户端特征，自动维护版本号与构建 CL 编号以规�?429 配额限制�? })} />
+                                            <HelpTooltip text={t('proxy.config.hub.tooltip', { defaultValue: '出站流量对齐 Google 官方 Antigravity Hub 原生客户端特征，自动维护版本号与构建 CL 编号以规避 429 配额限制。' })} />
                                             {hubFingerprint && (
                                                 <span className={cn(
                                                     "text-xs px-2 py-0.5 rounded-full font-mono font-medium",
@@ -1297,10 +1303,10 @@ function Settings() {
                                                     hubFingerprint.source === 'local' && "bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300",
                                                     hubFingerprint.source === 'baseline' && "bg-gray-100 text-gray-700 dark:bg-base-300 dark:text-gray-300",
                                                 )}>
-                                                    {hubFingerprint.source === 'custom' ? t('proxy.config.hub.source_custom', { defaultValue: '自定�? })
+                                                    {hubFingerprint.source === 'custom' ? t('proxy.config.hub.source_custom', { defaultValue: '自定义' })
                                                         : hubFingerprint.source === 'remote' ? t('proxy.config.hub.source_remote', { defaultValue: '远端探测' })
                                                         : hubFingerprint.source === 'local' ? t('proxy.config.hub.source_local', { defaultValue: '本地应用' })
-                                                        : t('proxy.config.hub.source_baseline', { defaultValue: '稳态基�? })}
+                                                        : t('proxy.config.hub.source_baseline', { defaultValue: '稳态基准' })}
                                                 </span>
                                             )}
                                         </div>
@@ -1311,11 +1317,11 @@ function Settings() {
                                             className="px-3 py-1.5 border border-gray-200 dark:border-base-300 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-100 dark:hover:bg-base-200 transition-colors text-sm flex items-center gap-1.5"
                                         >
                                             <RefreshCw className={cn("w-3.5 h-3.5", detectingHub && "animate-spin")} />
-                                            <span>{t('proxy.config.hub.detect_button', { defaultValue: '动态探�? })}</span>
+                                            <span>{t('proxy.config.hub.detect_button', { defaultValue: '动态探测' })}</span>
                                         </button>
                                     </div>
 
-                                    {/* 生效�?User-Agent 预览 */}
+                                    {/* 生效的 User-Agent 预览 */}
                                     <div className="bg-gray-50 dark:bg-base-200 border border-gray-200 dark:border-base-300 rounded-lg p-3 text-xs font-mono text-gray-700 dark:text-gray-300 break-all select-all flex items-center justify-between gap-2 mb-3">
                                         <span className="truncate">
                                             {hubFingerprint?.user_agent || 'antigravity/hub/2.23.1 (...) cl=998881661'}
@@ -1340,7 +1346,7 @@ function Settings() {
                                     <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                                         <div>
                                             <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">
-                                                {t('proxy.config.hub.version_label', { defaultValue: 'Hub 版本�?(Version)' })}
+                                                {t('proxy.config.hub.version_label', { defaultValue: 'Hub 版本号 (Version)' })}
                                             </label>
                                             <input
                                                 type="text"
@@ -1382,7 +1388,7 @@ function Settings() {
                                         </div>
                                     </div>
                                     <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">
-                                        {t('proxy.config.hub.tooltip', { defaultValue: '出站流量对齐 Google 官方 Antigravity Hub 原生客户端特征，自动维护版本号与构建 CL 编号以规�?429 配额限制�? })}
+                                        {t('proxy.config.hub.tooltip', { defaultValue: '出站流量对齐 Google 官方 Antigravity Hub 原生客户端特征，自动维护版本号与构建 CL 编号以规避 429 配额限制。' })}
                                     </p>
                                 </div>
 
@@ -1491,7 +1497,7 @@ function Settings() {
                     {/* 调试设置 */}
                     {activeTab === 'debug' && (
                         <div className="space-y-4 animate-in fade-in duration-500">
-                            {/* 标题和开�?*/}
+                            {/* 标题和开关 */}
                             <div className="flex items-center justify-between">
                                 <div>
                                     <h2 className="text-lg font-semibold text-gray-900 dark:text-base-content">
@@ -1665,7 +1671,7 @@ function Settings() {
                                         <h3 className="text-3xl font-black text-gray-900 dark:text-base-content tracking-tight mb-2">{t('common.app_name', 'Antigravity Tools')}</h3>
                                         <div className="flex items-center justify-center gap-2 text-sm">
                                             v{appVersion}
-                                            <span className="text-gray-400 dark:text-gray-600">�?/span>
+                                            <span className="text-gray-400 dark:text-gray-600">•</span>
                                             <span className="text-gray-500 dark:text-gray-400">{t('settings.branding.subtitle')}</span>
                                         </div>
                                     </div>
@@ -1891,7 +1897,7 @@ function Settings() {
                                                 </div>
                                             ) : (
                                                 <div className="text-sm text-green-600 dark:text-green-400 font-medium">
-                                                    �?{t('settings.about.latest_version')}
+                                                    ✓ {t('settings.about.latest_version')}
                                                 </div>
                                             )}
                                         </div>
@@ -1947,7 +1953,7 @@ function Settings() {
                             <div className="bg-gray-50 dark:bg-base-200 rounded-lg p-3 max-h-40 overflow-y-auto">
                                 <ul className="text-xs font-mono text-gray-600 dark:text-gray-400 space-y-1">
                                     {cachePaths.map((path, index) => (
-                                        <li key={index} className="truncate">�?{path}</li>
+                                        <li key={index} className="truncate">• {path}</li>
                                     ))}
                                 </ul>
                             </div>
@@ -2032,12 +2038,12 @@ function Settings() {
                     </p>
                 </ModalDialog>
 
-                {/* 新版本自动更新确认弹�?*/}
+                {/* 新版本自动更新确认弹窗 */}
                 <ModalDialog
                     isOpen={isUpdateConfirmOpen}
-                    title={t('settings.about.update_dialog_title', { defaultValue: '发现新版本可�? })}
+                    title={t('settings.about.update_dialog_title', { defaultValue: '发现新版本可用' })}
                     type="confirm"
-                    confirmText={t('settings.about.upgrade_now_btn', { defaultValue: '立即下载并自动更�? })}
+                    confirmText={t('settings.about.upgrade_now_btn', { defaultValue: '立即下载并自动更新' })}
                     cancelText={t('common.cancel', { defaultValue: '稍后再说' })}
                     onConfirm={handleConfirmUpdate}
                     onCancel={() => setIsUpdateConfirmOpen(false)}
@@ -2045,7 +2051,7 @@ function Settings() {
                     <div className="space-y-3 py-1 text-sm text-gray-700 dark:text-gray-300">
                         <p className="text-xs text-gray-600 dark:text-gray-400 leading-relaxed">
                             {t('settings.about.update_confirm_desc', {
-                                defaultValue: '检测到最新版本，点击“立即下载并自动更新”将直接启动自动下载并在准备就绪后覆盖安装生效�?,
+                                defaultValue: '检测到最新版本，点击“立即下载并自动更新”将直接启动自动下载并在准备就绪后覆盖安装生效。',
                             })}
                         </p>
                         <div className="bg-gray-50 dark:bg-base-200 p-3 rounded-lg border border-gray-200 dark:border-base-300 space-y-1.5 font-mono text-xs">
@@ -2054,7 +2060,7 @@ function Settings() {
                                 <span className="font-semibold text-gray-800 dark:text-gray-200">{updateInfo?.currentVersion || appVersion}</span>
                             </div>
                             <div className="flex items-center justify-between">
-                                <span className="text-gray-500">{t('settings.about.latest_version_label', { defaultValue: '最新版�? })}:</span>
+                                <span className="text-gray-500">{t('settings.about.latest_version_label', { defaultValue: '最新版本' })}:</span>
                                 <div className="flex items-center gap-1.5">
                                     <span className="font-bold text-emerald-600 dark:text-emerald-400">{updateInfo?.latestVersion}</span>
                                     {updateInfo?.channel === 'beta' && (

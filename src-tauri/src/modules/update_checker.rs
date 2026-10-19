@@ -111,7 +111,7 @@ pub fn get_upstream_proxy_url() -> Option<String> {
         }
     }
 
-    // 兜底：若未显式配置上游代理，尝试从系统环境变量获取代�?(HTTPS_PROXY / HTTP_PROXY / ALL_PROXY)
+    // 兜底：若未显式配置上游代理，尝试从系统环境变量获取代理 (HTTPS_PROXY / HTTP_PROXY / ALL_PROXY)
     for env_var in &[
         "HTTPS_PROXY",
         "https_proxy",
@@ -474,7 +474,8 @@ async fn check_static_url(url: &str, source_name: &str) -> Result<UpdateInfo, St
     }
 
     // fallback sources generally don't provide release notes or download specific URL, construct generic
-    let download_url = "https://github.com/Adolph-Adolf/Antigravity-Manager/releases/latest".to_string();
+    let download_url =
+        "https://github.com/Adolph-Adolf/Antigravity-Manager/releases/latest".to_string();
     let release_notes = format!(
         "New version detected via {}. Please check release page for details.",
         source_name
@@ -522,7 +523,7 @@ pub fn compare_versions(latest: &str, current: &str) -> bool {
     let (latest_nums, latest_pre) = parse_semver(latest);
     let (current_nums, current_pre) = parse_semver(current);
 
-    // 1. 先比较主版本�?[major, minor, patch]
+    // 1. 先比较主版本号 [major, minor, patch]
     for i in 0..latest_nums.len().max(current_nums.len()) {
         let l = latest_nums.get(i).copied().unwrap_or(0);
         let c = current_nums.get(i).copied().unwrap_or(0);
@@ -533,10 +534,11 @@ pub fn compare_versions(latest: &str, current: &str) -> bool {
         }
     }
 
-    // 2. 主版本号完全相同时，检�?pre-release (标准 SemVer 规则：无 pre-release > �?pre-release)
+    // 2. 主版本号完全相同时，检查 pre-release (标准 SemVer 规则：无 pre-release > 有 pre-release)
     match (latest_pre, current_pre) {
-        (None, Some(_)) => true,  // e.g. latest 4.8.1 正式�?> current 4.8.1-beta.2
-        (Some(_), None) => false, // e.g. latest 4.8.1-beta.2 < current 4.8.1 正式�?        (Some((l_tag, l_num)), Some((c_tag, c_num))) => {
+        (None, Some(_)) => true,  // e.g. latest 4.8.1 正式版 > current 4.8.1-beta.2
+        (Some(_), None) => false, // e.g. latest 4.8.1-beta.2 < current 4.8.1 正式版
+        (Some((l_tag, l_num)), Some((c_tag, c_num))) => {
             if l_tag != c_tag {
                 l_tag > c_tag
             } else {
@@ -723,7 +725,7 @@ mod tests {
         // Pre-release tests
         assert!(compare_versions("4.8.1-beta.2", "4.8.1-beta.1"));
         assert!(!compare_versions("4.8.1-beta.1", "4.8.1-beta.2"));
-        assert!(compare_versions("4.8.1", "4.8.1-beta.2")); // 正式�?> 预发布版
+        assert!(compare_versions("4.8.1", "4.8.1-beta.2")); // 正式版 > 预发布版
         assert!(!compare_versions("4.8.1-beta.2", "4.8.1"));
         assert!(compare_versions("4.8.2-beta.1", "4.8.1"));
     }

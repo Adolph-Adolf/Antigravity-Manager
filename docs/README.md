@@ -2,6 +2,9 @@
 
 This folder contains developer-focused documentation (architecture, implementation details, and validation steps).
 
+## Project
+- [`docs/PROJECT_OVERVIEW.md`](PROJECT_OVERVIEW.md) — repository-wide map: positioning, git lineage, tech stack, module layout, request pipeline, API surface, and fork-vs-upstream changes.
+
 ## Proxy
 - [`docs/proxy/auth.md`](proxy/auth.md) — proxy authorization modes, expected client behavior, and implementation pointers.
 - [`docs/proxy/accounts.md`](proxy/accounts.md) — account lifecycle in the proxy pool (including auto-disable on `invalid_grant`) and UI behavior.
