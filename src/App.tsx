@@ -11,9 +11,10 @@ import Security from './pages/Security';
 import ThemeManager from './components/common/ThemeManager';
 import UserToken from './pages/UserToken';
 import { UpdateNotification } from './components/UpdateNotification';
+import SuggestionDeleteThinkingModal from './components/common/SuggestionDeleteThinkingModal';
 import DebugConsole from './components/debug/DebugConsole';
 import { useEffect, useState } from 'react';
-import { useConfigStore } from './stores/useConfigStore';
+import { useConfigStore, normalizeLanguageCode } from './stores/useConfigStore';
 import { useAccountStore } from './stores/useAccountStore';
 import { useTranslation } from 'react-i18next';
 import { listen } from '@tauri-apps/api/event';
@@ -71,18 +72,16 @@ function App() {
     loadConfig();
   }, [loadConfig]);
 
-  // Sync language from config
+  // Sync language from config (仅在不同步时调度，避免无效重入)
   useEffect(() => {
-    if (config?.language) {
-      i18n.changeLanguage(config.language);
-      // Support RTL
-      if (config.language === 'ar') {
-        document.documentElement.dir = 'rtl';
-      } else {
-        document.documentElement.dir = 'ltr';
-      }
+    if (!config?.language) return;
+    const targetLang = normalizeLanguageCode(config.language);
+    const currentLang = normalizeLanguageCode(i18n.language);
+    if (targetLang !== currentLang) {
+      i18n.changeLanguage(targetLang);
+      document.documentElement.dir = targetLang === 'ar' ? 'rtl' : 'ltr';
     }
-  }, [config?.language, i18n]);
+  }, [config?.language]);
 
   // Listen for tray events
   useEffect(() => {
@@ -113,6 +112,14 @@ function App() {
         console.log('[App] Backend triggered quota refresh, syncing UI...');
         fetchCurrentAccount();
         fetchAccounts();
+      })
+    );
+
+    // 监听手动触发自动更新事件
+    unlistenPromises.push(
+      listen('app://trigger-update', () => {
+        console.log('[App] Received app://trigger-update event, showing updater...');
+        setShowUpdateNotification(true);
       })
     );
 
@@ -156,6 +163,7 @@ function App() {
     <AdminAuthGuard>
       <ThemeManager />
       <DebugConsole />
+      <SuggestionDeleteThinkingModal />
       {showUpdateNotification && (
         <UpdateNotification onClose={() => setShowUpdateNotification(false)} />
       )}

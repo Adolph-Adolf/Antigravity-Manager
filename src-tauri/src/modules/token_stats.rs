@@ -9,6 +9,8 @@ pub struct TokenStatsAggregated {
     pub total_input_tokens: u64,
     pub total_output_tokens: u64,
     pub total_cached_tokens: u64,
+    #[serde(default)]
+    pub total_reasoning_tokens: u64,
     pub total_tokens: u64,
     pub request_count: u64,
 }
@@ -20,6 +22,8 @@ pub struct AccountTokenStats {
     pub total_input_tokens: u64,
     pub total_output_tokens: u64,
     pub total_cached_tokens: u64,
+    #[serde(default)]
+    pub total_reasoning_tokens: u64,
     pub total_tokens: u64,
     pub request_count: u64,
 }
@@ -30,6 +34,8 @@ pub struct TokenStatsSummary {
     pub total_input_tokens: u64,
     pub total_output_tokens: u64,
     pub total_cached_tokens: u64,
+    #[serde(default)]
+    pub total_reasoning_tokens: u64,
     pub total_tokens: u64,
     pub total_requests: u64,
     pub unique_accounts: u64,
@@ -42,6 +48,8 @@ pub struct ModelTokenStats {
     pub total_input_tokens: u64,
     pub total_output_tokens: u64,
     pub total_cached_tokens: u64,
+    #[serde(default)]
+    pub total_reasoning_tokens: u64,
     pub total_tokens: u64,
     pub request_count: u64,
 }
@@ -159,8 +167,18 @@ pub fn init_db() -> Result<(), String> {
     )?;
     add_column_if_missing(
         &conn,
+        "token_usage",
+        "reasoning_tokens INTEGER NOT NULL DEFAULT 0",
+    )?;
+    add_column_if_missing(
+        &conn,
         "token_stats_hourly",
         "total_cached_tokens INTEGER NOT NULL DEFAULT 0",
+    )?;
+    add_column_if_missing(
+        &conn,
+        "token_stats_hourly",
+        "total_reasoning_tokens INTEGER NOT NULL DEFAULT 0",
     )?;
 
     Ok(())
@@ -173,6 +191,7 @@ pub fn record_usage(
     input_tokens: u32,
     output_tokens: u32,
     cached_tokens: u32,
+    reasoning_tokens: u32,
 ) -> Result<(), String> {
     let conn = connect_db()?;
     let timestamp = chrono::Local::now().timestamp();
@@ -180,32 +199,148 @@ pub fn record_usage(
 
     // Insert into raw usage table
     conn.execute(
-        "INSERT INTO token_usage (timestamp, account_email, model, input_tokens, output_tokens, cached_tokens, total_tokens)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-        params![timestamp, account_email, model, input_tokens, output_tokens, cached_tokens, total_tokens],
+        "INSERT INTO token_usage (timestamp, account_email, model, input_tokens, output_tokens, cached_tokens, reasoning_tokens, total_tokens)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        params![timestamp, account_email, model, input_tokens, output_tokens, cached_tokens, reasoning_tokens, total_tokens],
     ).map_err(|e| e.to_string())?;
 
     let hour_bucket = chrono::Local::now().format("%Y-%m-%d %H:00").to_string();
     conn.execute(
-        "INSERT INTO token_stats_hourly (hour_bucket, account_email, total_input_tokens, total_output_tokens, total_cached_tokens, total_tokens, request_count)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, 1)
+        "INSERT INTO token_stats_hourly (hour_bucket, account_email, total_input_tokens, total_output_tokens, total_cached_tokens, total_reasoning_tokens, total_tokens, request_count)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1)
          ON CONFLICT(hour_bucket, account_email) DO UPDATE SET
             total_input_tokens = total_input_tokens + ?3,
             total_output_tokens = total_output_tokens + ?4,
             total_cached_tokens = total_cached_tokens + ?5,
-            total_tokens = total_tokens + ?6,
+            total_reasoning_tokens = total_reasoning_tokens + ?6,
+            total_tokens = total_tokens + ?7,
             request_count = request_count + 1",
-        params![hour_bucket, account_email, input_tokens, output_tokens, cached_tokens, total_tokens],
+        params![hour_bucket, account_email, input_tokens, output_tokens, cached_tokens, reasoning_tokens, total_tokens],
     ).map_err(|e| e.to_string())?;
 
     Ok(())
 }
 
+/// Attach current weekly usage without loading raw history or persisting derived totals.
+pub(crate) fn populate_weekly_usage(accounts: &mut [crate::models::Account]) -> Result<(), String> {
+    if !accounts.iter().any(|account| {
+        account
+            .quota
+            .as_ref()
+            .is_some_and(|q| q.quota_groups.is_some())
+    }) {
+        return Ok(());
+    }
+    let conn = connect_db()?;
+    populate_weekly_usage_with_conn(&conn, accounts, chrono::Utc::now().timestamp())
+}
+
+fn populate_weekly_usage_with_conn(
+    conn: &Connection,
+    accounts: &mut [crate::models::Account],
+    now: i64,
+) -> Result<(), String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT COALESCE(SUM(input_tokens + output_tokens), 0) FROM token_usage
+         WHERE account_email = ?1 AND timestamp >= ?2 AND timestamp < ?3 AND timestamp <= ?4
+         AND ((?5 = 0 AND model LIKE 'gemini%')
+           OR (?5 = 1 AND (model LIKE 'claude%' OR model LIKE 'gpt%')))",
+        )
+        .map_err(|e| e.to_string())?;
+    for account in accounts {
+        let Some(groups) = account
+            .quota
+            .as_mut()
+            .and_then(|quota| quota.quota_groups.as_mut())
+        else {
+            continue;
+        };
+        for group in groups {
+            let name = group.display_name.to_lowercase();
+            for bucket in &mut group.buckets {
+                bucket.cycle_tokens = None;
+                let Some((start, end)) = bucket.weekly_cycle_bounds(now) else {
+                    continue;
+                };
+                let id = bucket.bucket_id.to_lowercase();
+                let third_party =
+                    name.contains("claude") || name.contains("gpt") || id.contains("3p");
+                if !third_party && !name.contains("gemini") && !id.contains("gemini") {
+                    continue;
+                }
+                bucket.cycle_tokens = Some(
+                    stmt.query_row(
+                        params![account.email, start, end, now, third_party],
+                        |row| row.get(0),
+                    )
+                    .map_err(|e| e.to_string())?,
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Get minute-level aggregated stats for a time range
+pub fn get_minute_stats(
+    minutes: i64,
+    step_minutes: i64,
+) -> Result<Vec<TokenStatsAggregated>, String> {
+    let conn = connect_db()?;
+    let step_secs = step_minutes.max(1) * 60;
+    let cutoff = if minutes <= 0 {
+        0
+    } else {
+        chrono::Local::now().timestamp() - (minutes * 60)
+    };
+
+    let mut stmt = conn
+        .prepare(
+            "SELECT strftime('%Y-%m-%d %H:%M', datetime(timestamp - (timestamp % ?2), 'unixepoch', 'localtime')) as minute_bucket, 
+                SUM(input_tokens) as input, 
+                SUM(output_tokens) as output,
+                SUM(cached_tokens) as cached,
+                SUM(COALESCE(reasoning_tokens, 0)) as reasoning,
+                SUM(total_tokens) as total,
+                COUNT(*) as count
+         FROM token_usage 
+         WHERE timestamp >= ?1
+         GROUP BY minute_bucket
+         ORDER BY minute_bucket ASC",
+        )
+        .map_err(|e| e.to_string())?;
+
+    let rows = stmt
+        .query_map(params![cutoff, step_secs], |row| {
+            Ok(TokenStatsAggregated {
+                period: row.get(0)?,
+                total_input_tokens: row.get(1)?,
+                total_output_tokens: row.get(2)?,
+                total_cached_tokens: row.get(3)?,
+                total_reasoning_tokens: row.get(4)?,
+                total_tokens: row.get(5)?,
+                request_count: row.get(6)?,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+
+    let mut result = Vec::new();
+    for row in rows {
+        result.push(row.map_err(|e| e.to_string())?);
+    }
+    Ok(result)
+}
+
 /// Get hourly aggregated stats for a time range
 pub fn get_hourly_stats(hours: i64) -> Result<Vec<TokenStatsAggregated>, String> {
     let conn = connect_db()?;
-    let cutoff = chrono::Local::now() - chrono::Duration::hours(hours);
-    let cutoff_bucket = cutoff.format("%Y-%m-%d %H:00").to_string();
+    let cutoff_bucket = if hours <= 0 {
+        String::new()
+    } else {
+        let cutoff = chrono::Local::now() - chrono::Duration::hours(hours);
+        cutoff.format("%Y-%m-%d %H:00").to_string()
+    };
 
     let mut stmt = conn
         .prepare(
@@ -213,6 +348,7 @@ pub fn get_hourly_stats(hours: i64) -> Result<Vec<TokenStatsAggregated>, String>
                 SUM(total_input_tokens) as input, 
                 SUM(total_output_tokens) as output,
                 SUM(total_cached_tokens) as cached,
+                SUM(total_reasoning_tokens) as reasoning,
                 SUM(total_tokens) as total,
                 SUM(request_count) as count
          FROM token_stats_hourly 
@@ -229,8 +365,9 @@ pub fn get_hourly_stats(hours: i64) -> Result<Vec<TokenStatsAggregated>, String>
                 total_input_tokens: row.get(1)?,
                 total_output_tokens: row.get(2)?,
                 total_cached_tokens: row.get(3)?,
-                total_tokens: row.get(4)?,
-                request_count: row.get(5)?,
+                total_reasoning_tokens: row.get(4)?,
+                total_tokens: row.get(5)?,
+                request_count: row.get(6)?,
             })
         })
         .map_err(|e| e.to_string())?;
@@ -245,8 +382,12 @@ pub fn get_hourly_stats(hours: i64) -> Result<Vec<TokenStatsAggregated>, String>
 /// Get daily aggregated stats for a time range
 pub fn get_daily_stats(days: i64) -> Result<Vec<TokenStatsAggregated>, String> {
     let conn = connect_db()?;
-    let cutoff = chrono::Local::now() - chrono::Duration::days(days);
-    let cutoff_bucket = cutoff.format("%Y-%m-%d").to_string();
+    let cutoff_bucket = if days <= 0 {
+        String::new()
+    } else {
+        let cutoff = chrono::Local::now() - chrono::Duration::days(days);
+        cutoff.format("%Y-%m-%d").to_string()
+    };
 
     let mut stmt = conn
         .prepare(
@@ -254,6 +395,7 @@ pub fn get_daily_stats(days: i64) -> Result<Vec<TokenStatsAggregated>, String> {
                 SUM(total_input_tokens) as input, 
                 SUM(total_output_tokens) as output,
                 SUM(total_cached_tokens) as cached,
+                SUM(total_reasoning_tokens) as reasoning,
                 SUM(total_tokens) as total,
                 SUM(request_count) as count
          FROM token_stats_hourly 
@@ -270,8 +412,9 @@ pub fn get_daily_stats(days: i64) -> Result<Vec<TokenStatsAggregated>, String> {
                 total_input_tokens: row.get(1)?,
                 total_output_tokens: row.get(2)?,
                 total_cached_tokens: row.get(3)?,
-                total_tokens: row.get(4)?,
-                request_count: row.get(5)?,
+                total_reasoning_tokens: row.get(4)?,
+                total_tokens: row.get(5)?,
+                request_count: row.get(6)?,
             })
         })
         .map_err(|e| e.to_string())?;
@@ -286,8 +429,12 @@ pub fn get_daily_stats(days: i64) -> Result<Vec<TokenStatsAggregated>, String> {
 /// Get weekly aggregated stats
 pub fn get_weekly_stats(weeks: i64) -> Result<Vec<TokenStatsAggregated>, String> {
     let conn = connect_db()?;
-    let cutoff = chrono::Local::now() - chrono::Duration::weeks(weeks);
-    let cutoff_timestamp = cutoff.timestamp();
+    let cutoff_timestamp = if weeks <= 0 {
+        0
+    } else {
+        let cutoff = chrono::Local::now() - chrono::Duration::weeks(weeks);
+        cutoff.timestamp()
+    };
 
     let mut stmt = conn
         .prepare(
@@ -295,6 +442,7 @@ pub fn get_weekly_stats(weeks: i64) -> Result<Vec<TokenStatsAggregated>, String>
                 SUM(input_tokens) as input, 
                 SUM(output_tokens) as output,
                 SUM(cached_tokens) as cached,
+                SUM(reasoning_tokens) as reasoning,
                 SUM(total_tokens) as total,
                 COUNT(*) as count
          FROM token_usage 
@@ -311,8 +459,9 @@ pub fn get_weekly_stats(weeks: i64) -> Result<Vec<TokenStatsAggregated>, String>
                 total_input_tokens: row.get(1)?,
                 total_output_tokens: row.get(2)?,
                 total_cached_tokens: row.get(3)?,
-                total_tokens: row.get(4)?,
-                request_count: row.get(5)?,
+                total_reasoning_tokens: row.get(4)?,
+                total_tokens: row.get(5)?,
+                request_count: row.get(6)?,
             })
         })
         .map_err(|e| e.to_string())?;
@@ -327,8 +476,12 @@ pub fn get_weekly_stats(weeks: i64) -> Result<Vec<TokenStatsAggregated>, String>
 /// Get per-account statistics for a time range
 pub fn get_account_stats(hours: i64) -> Result<Vec<AccountTokenStats>, String> {
     let conn = connect_db()?;
-    let cutoff = chrono::Local::now() - chrono::Duration::hours(hours);
-    let cutoff_bucket = cutoff.format("%Y-%m-%d %H:00").to_string();
+    let cutoff_bucket = if hours <= 0 {
+        String::new()
+    } else {
+        let cutoff = chrono::Local::now() - chrono::Duration::hours(hours);
+        cutoff.format("%Y-%m-%d %H:00").to_string()
+    };
 
     let mut stmt = conn
         .prepare(
@@ -336,6 +489,7 @@ pub fn get_account_stats(hours: i64) -> Result<Vec<AccountTokenStats>, String> {
                 SUM(total_input_tokens) as input, 
                 SUM(total_output_tokens) as output,
                 SUM(total_cached_tokens) as cached,
+                SUM(total_reasoning_tokens) as reasoning,
                 SUM(total_tokens) as total,
                 SUM(request_count) as count
          FROM token_stats_hourly 
@@ -352,8 +506,9 @@ pub fn get_account_stats(hours: i64) -> Result<Vec<AccountTokenStats>, String> {
                 total_input_tokens: row.get(1)?,
                 total_output_tokens: row.get(2)?,
                 total_cached_tokens: row.get(3)?,
-                total_tokens: row.get(4)?,
-                request_count: row.get(5)?,
+                total_reasoning_tokens: row.get(4)?,
+                total_tokens: row.get(5)?,
+                request_count: row.get(6)?,
             })
         })
         .map_err(|e| e.to_string())?;
@@ -368,14 +523,26 @@ pub fn get_account_stats(hours: i64) -> Result<Vec<AccountTokenStats>, String> {
 /// Get summary statistics for a time range
 pub fn get_summary_stats(hours: i64) -> Result<TokenStatsSummary, String> {
     let conn = connect_db()?;
-    let cutoff = chrono::Local::now() - chrono::Duration::hours(hours);
-    let cutoff_bucket = cutoff.format("%Y-%m-%d %H:00").to_string();
+    let cutoff_bucket = if hours <= 0 {
+        String::new()
+    } else {
+        let cutoff = chrono::Local::now() - chrono::Duration::hours(hours);
+        cutoff.format("%Y-%m-%d %H:00").to_string()
+    };
 
-    let (total_input, total_output, total_cached, total, requests): (u64, u64, u64, u64, u64) =
-        conn.query_row(
+    let (total_input, total_output, total_cached, total_reasoning, total, requests): (
+        u64,
+        u64,
+        u64,
+        u64,
+        u64,
+        u64,
+    ) = conn
+        .query_row(
             "SELECT COALESCE(SUM(total_input_tokens), 0),
                 COALESCE(SUM(total_output_tokens), 0),
                 COALESCE(SUM(total_cached_tokens), 0),
+                COALESCE(SUM(total_reasoning_tokens), 0),
                 COALESCE(SUM(total_tokens), 0),
                 COALESCE(SUM(request_count), 0)
          FROM token_stats_hourly 
@@ -388,6 +555,7 @@ pub fn get_summary_stats(hours: i64) -> Result<TokenStatsSummary, String> {
                     row.get(2)?,
                     row.get(3)?,
                     row.get(4)?,
+                    row.get(5)?,
                 ))
             },
         )
@@ -405,6 +573,7 @@ pub fn get_summary_stats(hours: i64) -> Result<TokenStatsSummary, String> {
         total_input_tokens: total_input,
         total_output_tokens: total_output,
         total_cached_tokens: total_cached,
+        total_reasoning_tokens: total_reasoning,
         total_tokens: total,
         total_requests: requests,
         unique_accounts,
@@ -413,7 +582,11 @@ pub fn get_summary_stats(hours: i64) -> Result<TokenStatsSummary, String> {
 
 pub fn get_model_stats(hours: i64) -> Result<Vec<ModelTokenStats>, String> {
     let conn = connect_db()?;
-    let cutoff = chrono::Local::now().timestamp() - (hours * 3600);
+    let cutoff = if hours <= 0 {
+        0
+    } else {
+        chrono::Local::now().timestamp() - (hours * 3600)
+    };
 
     let mut stmt = conn
         .prepare(
@@ -421,6 +594,7 @@ pub fn get_model_stats(hours: i64) -> Result<Vec<ModelTokenStats>, String> {
                 SUM(input_tokens) as input,
                 SUM(output_tokens) as output,
                 SUM(cached_tokens) as cached,
+                SUM(reasoning_tokens) as reasoning,
                 SUM(total_tokens) as total,
                 COUNT(*) as count
          FROM token_usage
@@ -437,8 +611,9 @@ pub fn get_model_stats(hours: i64) -> Result<Vec<ModelTokenStats>, String> {
                 total_input_tokens: row.get(1)?,
                 total_output_tokens: row.get(2)?,
                 total_cached_tokens: row.get(3)?,
-                total_tokens: row.get(4)?,
-                request_count: row.get(5)?,
+                total_reasoning_tokens: row.get(4)?,
+                total_tokens: row.get(5)?,
+                request_count: row.get(6)?,
             })
         })
         .map_err(|e| e.to_string())?;
@@ -450,9 +625,61 @@ pub fn get_model_stats(hours: i64) -> Result<Vec<ModelTokenStats>, String> {
     Ok(result)
 }
 
+pub fn get_model_trend_minute(
+    minutes: i64,
+    step_minutes: i64,
+) -> Result<Vec<ModelTrendPoint>, String> {
+    let conn = connect_db()?;
+    let step_secs = step_minutes.max(1) * 60;
+    let cutoff = if minutes <= 0 {
+        0
+    } else {
+        chrono::Local::now().timestamp() - (minutes * 60)
+    };
+
+    let mut stmt = conn
+        .prepare(
+            "SELECT strftime('%Y-%m-%d %H:%M', datetime(timestamp - (timestamp % ?2), 'unixepoch', 'localtime')) as minute_bucket,
+                model,
+                SUM(total_tokens) as total
+         FROM token_usage
+         WHERE timestamp >= ?1
+         GROUP BY minute_bucket, model
+         ORDER BY minute_bucket ASC",
+        )
+        .map_err(|e| e.to_string())?;
+
+    let mut trend_map: std::collections::BTreeMap<String, std::collections::HashMap<String, u64>> =
+        std::collections::BTreeMap::new();
+
+    let rows = stmt
+        .query_map(params![cutoff, step_secs], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, u64>(2)?,
+            ))
+        })
+        .map_err(|e| e.to_string())?;
+
+    for row in rows {
+        let (period, model, total) = row.map_err(|e| e.to_string())?;
+        trend_map.entry(period).or_default().insert(model, total);
+    }
+
+    Ok(trend_map
+        .into_iter()
+        .map(|(period, model_data)| ModelTrendPoint { period, model_data })
+        .collect())
+}
+
 pub fn get_model_trend_hourly(hours: i64) -> Result<Vec<ModelTrendPoint>, String> {
     let conn = connect_db()?;
-    let cutoff = chrono::Local::now().timestamp() - (hours * 3600);
+    let cutoff = if hours <= 0 {
+        0
+    } else {
+        chrono::Local::now().timestamp() - (hours * 3600)
+    };
 
     let mut stmt = conn
         .prepare(
@@ -492,7 +719,11 @@ pub fn get_model_trend_hourly(hours: i64) -> Result<Vec<ModelTrendPoint>, String
 
 pub fn get_model_trend_daily(days: i64) -> Result<Vec<ModelTrendPoint>, String> {
     let conn = connect_db()?;
-    let cutoff = chrono::Local::now().timestamp() - (days * 24 * 3600);
+    let cutoff = if days <= 0 {
+        0
+    } else {
+        chrono::Local::now().timestamp() - (days * 24 * 3600)
+    };
 
     let mut stmt = conn
         .prepare(
@@ -530,9 +761,64 @@ pub fn get_model_trend_daily(days: i64) -> Result<Vec<ModelTrendPoint>, String> 
         .collect())
 }
 
+pub fn get_account_trend_minute(
+    minutes: i64,
+    step_minutes: i64,
+) -> Result<Vec<AccountTrendPoint>, String> {
+    let conn = connect_db()?;
+    let step_secs = step_minutes.max(1) * 60;
+    let cutoff = if minutes <= 0 {
+        0
+    } else {
+        chrono::Local::now().timestamp() - (minutes * 60)
+    };
+
+    let mut stmt = conn
+        .prepare(
+            "SELECT strftime('%Y-%m-%d %H:%M', datetime(timestamp - (timestamp % ?2), 'unixepoch', 'localtime')) as minute_bucket,
+                account_email,
+                SUM(total_tokens) as total
+         FROM token_usage
+         WHERE timestamp >= ?1
+         GROUP BY minute_bucket, account_email
+         ORDER BY minute_bucket ASC",
+        )
+        .map_err(|e| e.to_string())?;
+
+    let mut trend_map: std::collections::BTreeMap<String, std::collections::HashMap<String, u64>> =
+        std::collections::BTreeMap::new();
+
+    let rows = stmt
+        .query_map(params![cutoff, step_secs], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, u64>(2)?,
+            ))
+        })
+        .map_err(|e| e.to_string())?;
+
+    for row in rows {
+        let (period, account, total) = row.map_err(|e| e.to_string())?;
+        trend_map.entry(period).or_default().insert(account, total);
+    }
+
+    Ok(trend_map
+        .into_iter()
+        .map(|(period, account_data)| AccountTrendPoint {
+            period,
+            account_data,
+        })
+        .collect())
+}
+
 pub fn get_account_trend_hourly(hours: i64) -> Result<Vec<AccountTrendPoint>, String> {
     let conn = connect_db()?;
-    let cutoff = chrono::Local::now().timestamp() - (hours * 3600);
+    let cutoff = if hours <= 0 {
+        0
+    } else {
+        chrono::Local::now().timestamp() - (hours * 3600)
+    };
 
     let mut stmt = conn
         .prepare(
@@ -575,7 +861,11 @@ pub fn get_account_trend_hourly(hours: i64) -> Result<Vec<AccountTrendPoint>, St
 
 pub fn get_account_trend_daily(days: i64) -> Result<Vec<AccountTrendPoint>, String> {
     let conn = connect_db()?;
-    let cutoff = chrono::Local::now().timestamp() - (days * 24 * 3600);
+    let cutoff = if days <= 0 {
+        0
+    } else {
+        chrono::Local::now().timestamp() - (days * 24 * 3600)
+    };
 
     let mut stmt = conn
         .prepare(
@@ -619,6 +909,150 @@ pub fn get_account_trend_daily(days: i64) -> Result<Vec<AccountTrendPoint>, Stri
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn weekly_snapshot(observed: i64, reset: i64, fraction: f64) -> crate::models::QuotaData {
+        let iso = |seconds| {
+            chrono::DateTime::from_timestamp(seconds, 0)
+                .unwrap()
+                .to_rfc3339()
+        };
+        serde_json::from_value(serde_json::json!({
+            "models": [], "last_updated": observed,
+            "quota_groups": [
+                {"display_name": "Gemini Models", "buckets": [
+                    {"bucket_id": "gemini-weekly", "window": "weekly", "remaining_fraction": fraction,
+                     "reset_time": iso(reset), "observed_at": observed * 1000},
+                    {"bucket_id": "gemini-5h", "window": "5h", "remaining_fraction": 1,
+                     "reset_time": iso(reset), "observed_at": observed * 1000}
+                ]},
+                {"display_name": "Claude and GPT models", "buckets": [
+                    {"bucket_id": "3p-weekly", "window": "weekly", "remaining_fraction": 0.5,
+                     "reset_time": iso(reset + 100), "observed_at": observed * 1000}
+                ]}
+            ]
+        })).unwrap()
+    }
+
+    #[test]
+    fn weekly_usage_tracks_accounts_groups_and_official_reset_cycles() {
+        let now = 1_700_000_000;
+        let reset = now + 100;
+        let start = reset - 7 * 86400;
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE token_usage (timestamp INTEGER, account_email TEXT,
+            model TEXT, input_tokens INTEGER, output_tokens INTEGER, cached_tokens INTEGER);",
+        )
+        .unwrap();
+        for (email, model, timestamp, input, output) in [
+            ("a", "gemini-pro", start - 1, 900, 0),
+            ("a", "gemini-pro", start, 11, 2),
+            ("a", "claude-sonnet", start, 900, 0),
+            ("a", "claude-sonnet", start + 100, 20, 0),
+            ("a", "gpt-oss", now, 30, 0),
+            ("a", "custom-alias", now, 900, 0),
+            ("b", "gemini-pro", start - 51, 900, 0),
+            ("b", "gemini-pro", start - 50, 7, 3),
+            ("b", "gemini-pro", now, 900, 0),
+            ("a", "gemini-pro", reset, 40, 0),
+        ] {
+            conn.execute(
+                "INSERT INTO token_usage VALUES (?1, ?2, ?3, ?4, ?5, 99)",
+                params![timestamp, email, model, input, output],
+            )
+            .unwrap();
+        }
+        let mut accounts: Vec<_> = [("a", reset), ("b", reset - 50)]
+            .into_iter()
+            .map(|(email, account_reset)| {
+                let token = crate::models::TokenData::new(
+                    String::new(),
+                    String::new(),
+                    0,
+                    None,
+                    None,
+                    None,
+                    false,
+                    None,
+                );
+                let mut account = crate::models::Account::new(email.into(), email.into(), token);
+                account.update_quota(weekly_snapshot(now, account_reset, 0.0));
+                account
+            })
+            .collect();
+        let buckets = |account: &crate::models::Account| {
+            account
+                .quota
+                .as_ref()
+                .unwrap()
+                .quota_groups
+                .as_ref()
+                .unwrap()
+                .iter()
+                .flat_map(|group| group.buckets.iter().map(|bucket| bucket.cycle_tokens))
+                .collect::<Vec<_>>()
+        };
+        populate_weekly_usage_with_conn(&conn, &mut accounts, now).unwrap();
+        assert_eq!(buckets(&accounts[0]), vec![Some(13), None, Some(50)]);
+        assert_eq!(buckets(&accounts[1]), vec![Some(910), None, Some(0)]);
+
+        // Legacy persisted boundaries are ignored and omitted on the next serialization.
+        let mut legacy = serde_json::to_value(&accounts[0]).unwrap();
+        legacy["quota"]["quota_groups"][0]["buckets"][0]["cycle_start"] = now.into();
+        accounts[0] = serde_json::from_value(legacy).unwrap();
+        assert!(
+            serde_json::to_value(&accounts[0]).unwrap()["quota"]["quota_groups"][0]["buckets"][0]
+                .get("cycle_start")
+                .is_none()
+        );
+        populate_weekly_usage_with_conn(&conn, &mut accounts, now).unwrap();
+        assert_eq!(buckets(&accounts[0]), vec![Some(13), None, Some(50)]);
+
+        // Small and large replenishments, refreshes and reloads keep the official interval.
+        for (offset, fraction) in [(1, 0.000001), (2, 1.0), (3, 0.9)] {
+            accounts[0].update_quota(weekly_snapshot(now + offset, reset, fraction));
+            accounts[0] =
+                serde_json::from_value(serde_json::to_value(&accounts[0]).unwrap()).unwrap();
+            populate_weekly_usage_with_conn(&conn, &mut accounts, now + offset).unwrap();
+            assert_eq!(buckets(&accounts[0]), vec![Some(13), None, Some(50)]);
+            assert_eq!(buckets(&accounts[1]), vec![Some(910), None, Some(0)]);
+        }
+        // An older positive observation cannot move the boundary.
+        accounts[0].update_quota(weekly_snapshot(now, reset + 10, 1.0));
+        populate_weekly_usage_with_conn(&conn, &mut accounts, now + 3).unwrap();
+        assert_eq!(buckets(&accounts[0]), vec![Some(13), None, Some(50)]);
+
+        // A new official reset switches cycles and includes its exact new start.
+        accounts[0].update_quota(weekly_snapshot(reset, reset + 7 * 86400, 1.0));
+        populate_weekly_usage_with_conn(&conn, &mut accounts, reset).unwrap();
+        assert_eq!(buckets(&accounts[0]), vec![Some(40), None, None]);
+        let first = &accounts[0]
+            .quota
+            .as_ref()
+            .unwrap()
+            .quota_groups
+            .as_ref()
+            .unwrap()[0]
+            .buckets[0];
+        assert_eq!(
+            first.weekly_cycle_bounds(reset),
+            Some((reset, reset + 7 * 86400))
+        );
+
+        // Invalid and expired periods are unavailable, never fabricated zero totals.
+        accounts[0]
+            .quota
+            .as_mut()
+            .unwrap()
+            .quota_groups
+            .as_mut()
+            .unwrap()[0]
+            .buckets[0]
+            .reset_time = "invalid".into();
+        populate_weekly_usage_with_conn(&conn, &mut accounts, reset + 101).unwrap();
+        assert_eq!(buckets(&accounts[0]), vec![None, None, Some(0)]);
+        assert_eq!(buckets(&accounts[1]), vec![None, None, None]);
+    }
 
     #[test]
     fn test_record_and_query() {

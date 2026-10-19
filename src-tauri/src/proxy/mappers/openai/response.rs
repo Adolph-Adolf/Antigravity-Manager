@@ -2,29 +2,6 @@
 use super::models::*;
 use serde_json::Value;
 
-pub fn is_shell_or_terminal_tool(tool_name: &str) -> bool {
-    matches!(
-        tool_name.to_ascii_lowercase().as_str(),
-        "shell"
-            | "bash"
-            | "local_shell"
-            | "local_shell_call"
-            | "powershell"
-            | "pwsh"
-            | "terminal"
-            | "cmd"
-            | "run_command"
-            | "execute_command"
-    )
-}
-
-pub fn is_workflow_tool(tool_name: &str) -> bool {
-    matches!(
-        tool_name.to_ascii_lowercase().as_str(),
-        "workflow" | "run_workflow" | "execute_workflow"
-    )
-}
-
 /// 标准化并清洗 shell / PowerShell / DSH (DeepSeek Harness) 等工具参数
 /// 1. 将 cmd / code / script / shell_command / input 等别名重命名为 command
 /// 2. [DSH tool-pwsh / tool-bash & WorkBuddy]：
@@ -35,179 +12,14 @@ pub fn is_workflow_tool(tool_name: &str) -> bool {
 /// 3. [DSH tool-workflow]：
 ///    - DSH 严格校验 `script` (string) 和 `meta` (object with `name` and `description`)。
 ///    - 若模型返回扁平结构的 `name` / `description`，自动归拢装配进 `meta` 对象中，确保运行期校验通过。
+/// 纯透传协议工具参数，不进行任何字段截断、生成或改写
 pub fn normalize_and_sanitize_tool_args(tool_name: &str, args: &mut Value) {
-    if is_workflow_tool(tool_name) {
-        if let Some(obj) = args.as_object_mut() {
-            // 1. 规范化 script 字段
-            if !obj.contains_key("script") {
-                for alt in &["code", "content", "command", "workflow", "body"] {
-                    if let Some(val) = obj.remove(*alt) {
-                        obj.insert("script".to_string(), val);
-                        break;
-                    }
-                }
-            }
-            // 若 script 为空或缺失，给一个合法的默认占位脚本
-            let script_empty = match obj.get("script") {
-                None => true,
-                Some(v) => v.as_str().map(|s| s.trim().is_empty()).unwrap_or(false),
-            };
-            if script_empty {
-                obj.insert(
-                    "script".to_string(),
-                    Value::String("// Workflow action logged\nreturn true;".to_string()),
-                );
-            }
-
-            // 2. 规范化 meta 字段: { name: string, description: string }
-            let mut meta_obj = match obj.remove("meta") {
-                Some(Value::Object(m)) => m,
-                _ => serde_json::Map::new(),
-            };
-
-            // 从顶层回捞可能被打平的 name 和 description
-            if !meta_obj.contains_key("name") {
-                if let Some(top_name) = obj.remove("name") {
-                    meta_obj.insert("name".to_string(), top_name);
-                } else {
-                    meta_obj.insert(
-                        "name".to_string(),
-                        Value::String("dsh_workflow_task".to_string()),
-                    );
-                }
-            }
-            if !meta_obj.contains_key("description") {
-                if let Some(top_desc) = obj.remove("description") {
-                    meta_obj.insert("description".to_string(), top_desc);
-                } else {
-                    let desc = obj
-                        .get("script")
-                        .and_then(|v| v.as_str())
-                        .map(|s| {
-                            let first_line = s.lines().next().unwrap_or("Execute workflow");
-                            let clean = first_line.trim().trim_start_matches("//").trim();
-                            if clean.is_empty() {
-                                "Execute workflow script"
-                            } else {
-                                clean
-                            }
-                        })
-                        .unwrap_or("Execute workflow script");
-                    meta_obj.insert("description".to_string(), Value::String(desc.to_string()));
-                }
-            }
-
-            obj.insert("meta".to_string(), Value::Object(meta_obj));
-        }
-        return;
-    }
-
-    if !is_shell_or_terminal_tool(tool_name) {
-        return;
-    }
-
-    if let Some(obj) = args.as_object_mut() {
-        // 1. 别名归一化至 command
-        if !obj.contains_key("command") {
-            for alt_key in &["cmd", "code", "script", "shell_command", "input"] {
-                if let Some(val) = obj.remove(*alt_key) {
-                    obj.insert("command".to_string(), val);
-                    tracing::debug!(
-                        "[OpenAI] Normalized tool '{}' arg '{}' -> 'command'",
-                        tool_name,
-                        alt_key
-                    );
-                    break;
-                }
-            }
-        }
-
-        // 2. 检查 command 是否缺失或为空
-        let command_missing = match obj.get("command") {
-            None => true,
-            Some(v) => v.as_str().map(|s| s.trim().is_empty()).unwrap_or(false),
-        };
-
-        if command_missing {
-            // 尝试查看模型是否把真实命令直接写在了 description 里
-            let raw_desc = obj
-                .get("description")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .trim()
-                .to_string();
-
-            // 如果 description 看起来像一条可执行命令（如包含管道、常见命令开头等），不要盲目覆盖成 echo
-            let is_likely_command = !raw_desc.is_empty()
-                && (raw_desc.starts_with("git ")
-                    || raw_desc.starts_with("ls ")
-                    || raw_desc.starts_with("dir ")
-                    || raw_desc.starts_with("cd ")
-                    || raw_desc.starts_with("cat ")
-                    || raw_desc.starts_with("cargo ")
-                    || raw_desc.starts_with("npm ")
-                    || raw_desc.starts_with("pnpm ")
-                    || raw_desc.starts_with("yarn ")
-                    || raw_desc.starts_with("node ")
-                    || raw_desc.starts_with("python ")
-                    || raw_desc.starts_with("Get-")
-                    || raw_desc.starts_with("Set-")
-                    || raw_desc.contains(" | ")
-                    || raw_desc.contains(";"));
-
-            if is_likely_command {
-                obj.insert("command".to_string(), Value::String(raw_desc));
-            } else {
-                let desc_for_log = if raw_desc.is_empty() {
-                    "Action logged"
-                } else {
-                    raw_desc.as_str()
-                };
-
-                let safe_desc: String = desc_for_log
-                    .chars()
-                    .filter(|c| c.is_alphanumeric() || " _-:.,/".contains(*c))
-                    .collect();
-                let trimmed = safe_desc.trim();
-                let safe_title = if trimmed.is_empty() {
-                    "Action logged"
-                } else {
-                    trimmed
-                };
-
-                let fallback_cmd = format!("echo \"[OK: Action logged - {}]\"", safe_title);
-                obj.insert("command".to_string(), Value::String(fallback_cmd));
-                tracing::warn!(
-                    tool = %tool_name,
-                    description = %raw_desc,
-                    "Injected safe fallback 'command' into tool call arguments to prevent downstream client crash (Issue #3430)"
-                );
-            }
-        }
-
-        // 3. [Issue #3440] DSH (DeepSeek Harness) 强依赖 `description` 字段（必填 string）。
-        //    如果缺失 description，必须从 command 生成简要描述，防止 DSH 抛出 description is required 崩溃。
-        let desc_missing = match obj.get("description") {
-            None => true,
-            Some(v) => v.as_str().map(|s| s.trim().is_empty()).unwrap_or(false),
-        };
-
-        if desc_missing {
-            let cmd_str = obj
-                .get("command")
-                .and_then(|v| v.as_str())
-                .unwrap_or("Execute shell command")
-                .trim();
-            // 取命令的前 60 字符作为简要描述
-            let auto_desc = if cmd_str.len() > 60 {
-                format!("Run: {}...", &cmd_str[..57])
-            } else if !cmd_str.is_empty() {
-                format!("Run: {}", cmd_str)
-            } else {
-                "Execute command".to_string()
-            };
-            obj.insert("description".to_string(), Value::String(auto_desc));
-        }
+    if let Some(obj) = args.as_object() {
+        tracing::debug!(
+            "[OpenAI] Tool Call (Passthrough): '{}' Args: {:?}",
+            tool_name,
+            obj
+        );
     }
 }
 
@@ -215,54 +27,23 @@ pub fn resolve_shell_tool_name(
     model_tool_name: &str,
     client_tool_names: &std::collections::HashSet<String>,
 ) -> String {
-    if model_tool_name == "shell"
-        || model_tool_name == "bash"
-        || model_tool_name == "local_shell"
-        || model_tool_name == "local_shell_call"
+    if client_tool_names.contains(model_tool_name) {
+        return model_tool_name.to_string();
+    }
+    // [FIX #3224] 工具调用智能名称映射：当客户端注册了 bash/shell，但模型调用了 local_shell_call 时自动对齐
+    if model_tool_name == "local_shell_call"
+        || model_tool_name == "shell_command"
+        || model_tool_name == "shell"
     {
-        if client_tool_names.contains(model_tool_name) {
-            return model_tool_name.to_string();
-        }
-        for name in &["local_shell_call", "bash", "shell", "local_shell"] {
-            if client_tool_names.contains(*name) {
-                return name.to_string();
-            }
-        }
-        "local_shell_call".to_string()
-    } else {
-        model_tool_name.to_string()
-    }
-}
-fn extract_apply_patch_input(args: &Value) -> String {
-    if let Some(obj) = args.as_object() {
-        if let Some(input) = obj.get("input").and_then(|v| v.as_str()) {
-            return input.to_string();
-        }
-        if let Some(arr) = obj.get("command").and_then(|v| v.as_array()) {
-            if arr.len() > 1 {
-                if let Some(patch) = arr[1].as_str() {
-                    return patch.to_string();
-                }
-            }
-        }
-        if let Some(cmd_str) = obj.get("command").and_then(|v| v.as_str()) {
-            if let Some(patch) = cmd_str.strip_prefix("apply_patch\n") {
-                return patch.to_string();
-            }
-            if let Some(patch) = cmd_str.strip_prefix("apply_patch ") {
-                return patch.to_string();
-            }
-            return cmd_str.to_string();
-        }
-        for key in ["patch_text", "patch", "diff", "content"] {
-            if let Some(patch) = obj.get(key).and_then(|v| v.as_str()) {
-                return patch.to_string();
-            }
+        if client_tool_names.contains("bash") {
+            return "bash".to_string();
+        } else if client_tool_names.contains("shell") {
+            return "shell".to_string();
+        } else if client_tool_names.contains("local_shell_call") {
+            return "local_shell_call".to_string();
         }
     }
-    args.as_str()
-        .map(str::to_string)
-        .unwrap_or_else(|| serde_json::to_string(args).unwrap_or_default())
+    model_tool_name.to_string()
 }
 
 pub fn transform_openai_response(
@@ -330,33 +111,7 @@ pub fn transform_openai_response(
                         // [FIX #1575 & #3430] 标准化并清洗 shell / PowerShell 等工具参数名称与必填字段
                         normalize_and_sanitize_tool_args(name, &mut args_json);
 
-                        let mut arguments_str = args_json.to_string();
-
-                        // [FIX] Codex CLI apply_patch freeform raw string
-                        if name == "apply_patch" || name == "apply_patch_v2" {
-                            let extracted_patch = extract_apply_patch_input(&args_json);
-                            let (optimized_patch, _) =
-                                crate::proxy::adapters::apply_patch_preflight::optimize_patch(
-                                    &extracted_patch,
-                                    None,
-                                    true,
-                                );
-                            arguments_str = optimized_patch;
-                            if let Some((line, message)) =
-                                crate::proxy::adapters::apply_patch_preflight::validate_v4a_for_codex(
-                                    &arguments_str,
-                                )
-                            {
-                                if !content_out.is_empty() {
-                                    content_out.push('\n');
-                                }
-                                content_out.push_str(&format!(
-                                    "apply_patch 格式非法，已停止执行以避免重复失败。第 {line} 行：{message}"
-                                ));
-                                continue;
-                            }
-                        }
-
+                        let arguments_str = args_json.to_string();
                         let final_name = resolve_shell_tool_name(name, client_tool_names);
 
                         let id = fc
@@ -370,8 +125,13 @@ pub fn transform_openai_response(
                             .or(part.get("thought_signature"))
                             .and_then(|s| s.as_str())
                         {
-                            crate::proxy::SignatureCache::global()
-                                .cache_tool_signature(&id, sig.to_string());
+                            if let Some(sid) = session_id {
+                                crate::proxy::SignatureCache::global().cache_tool_signature(
+                                    sid,
+                                    &id,
+                                    sig.to_string(),
+                                );
+                            }
                         }
 
                         tool_calls.push(ToolCall {
@@ -493,29 +253,30 @@ pub fn transform_openai_response(
             }
 
             let raw_finish_reason = candidate.get("finishReason").and_then(|f| f.as_str());
-            let is_malformed_function_call = raw_finish_reason == Some("MALFORMED_FUNCTION_CALL");
 
-            let finish_reason = raw_finish_reason
-                .map(|f| match f {
-                    "STOP" => "stop",
-                    "MAX_TOKENS" => "length",
-                    "SAFETY" => "content_filter",
-                    "RECITATION" => "content_filter",
-                    "MALFORMED_FUNCTION_CALL" => "stop",
-                    _ => "stop",
-                })
-                .unwrap_or("stop");
+            // 规范化 finish_reason：若包含工具调用，强制遵循 OpenAI 规范映射为 tool_calls
+            let finish_reason = if !tool_calls.is_empty() {
+                "tool_calls"
+            } else {
+                raw_finish_reason
+                    .map(|f| match f {
+                        "STOP" => "stop",
+                        "MAX_TOKENS" => "length",
+                        "SAFETY" | "RECITATION" => "content_filter",
+                        "MALFORMED_FUNCTION_CALL" => "stop",
+                        _ => "stop",
+                    })
+                    .unwrap_or("stop")
+            };
 
             let refusal_val = if finish_reason == "content_filter" {
-                Some("生成由于安全策略或背诵保护被中止".to_string())
+                Some(
+                    "Generation was terminated due to safety policy or recitation checks."
+                        .to_string(),
+                )
             } else {
                 None
             };
-
-            // [FIX MALFORMED_FUNCTION_CALL] 避免客户端空白
-            if is_malformed_function_call && content_out.is_empty() {
-                content_out.push_str("很抱歉，当前模型在尝试调取实时信息时遇到了格式异常。若需要查询实时天气或最新资讯，请尝试使用联网模式（模型名带 -online 后缀）或配置天气/搜索插件。");
-            }
 
             choices.push(Choice {
                 index: idx as u32,
@@ -553,7 +314,10 @@ pub fn transform_openai_response(
                 .get("blockReason")
                 .and_then(|v| v.as_str())
                 .unwrap_or("UNKNOWN");
-            let refusal_msg = format!("请求由于安全策略被拦截 (blockReason: {})", reason);
+            let refusal_msg = format!(
+                "Request was blocked due to safety policy (blockReason: {}).",
+                reason
+            );
             choices.push(Choice {
                 index: 0,
                 message: OpenAIMessage {
@@ -726,133 +490,83 @@ mod tests {
     }
 
     #[test]
-    fn test_normalize_and_sanitize_tool_args_shell_alias() {
+    fn test_normalize_and_sanitize_tool_args_passthrough() {
         let mut args = json!({
-            "cmd": "ls -la /tmp"
+            "cmd": "ls -la /tmp",
+            "description": "Custom description",
+            "arbitrary_field": 123
         });
         normalize_and_sanitize_tool_args("shell", &mut args);
-        assert_eq!(args["command"], "ls -la /tmp");
-        assert!(!args.as_object().unwrap().contains_key("cmd"));
-    }
-
-    #[test]
-    fn test_normalize_and_sanitize_tool_args_powershell_missing_command_with_description() {
-        // [Issue #3430] WorkBuddy PowerShell tool call with only description
-        let mut args = json!({
-            "description": "列出目录内容"
-        });
-        normalize_and_sanitize_tool_args("PowerShell", &mut args);
-        assert_eq!(
-            args["command"],
-            "echo \"[OK: Action logged - 列出目录内容]\""
-        );
-        assert_eq!(args["description"], "列出目录内容");
-    }
-
-    #[test]
-    fn test_normalize_and_sanitize_tool_args_bash_empty_command_fallback() {
-        let mut args = json!({
-            "command": "   ",
-            "description": "Fetch status"
-        });
-        normalize_and_sanitize_tool_args("Bash", &mut args);
-        assert_eq!(
-            args["command"],
-            "echo \"[OK: Action logged - Fetch status]\""
-        );
-    }
-
-    #[test]
-    fn test_normalize_and_sanitize_tool_args_unrelated_tool_untouched() {
-        let mut args = json!({
-            "query": "select * from users"
-        });
-        normalize_and_sanitize_tool_args("sql_query", &mut args);
+        // 验证纯透传：参数原样保持，没有任何字段被重命名、删除或注入
+        assert_eq!(args["cmd"], "ls -la /tmp");
+        assert_eq!(args["description"], "Custom description");
+        assert_eq!(args["arbitrary_field"], 123);
         assert!(!args.as_object().unwrap().contains_key("command"));
-        assert_eq!(args["query"], "select * from users");
     }
 
     #[test]
-    fn test_transform_openai_response_sanitizes_powershell_tool_call() {
+    fn test_resolve_shell_tool_name_aligns_local_shell_call_issue_3224() {
+        let mut client_tools = std::collections::HashSet::new();
+        client_tools.insert("bash".to_string());
+        client_tools.insert("read".to_string());
+        client_tools.insert("edit".to_string());
+
+        // 当客户端只注册了 bash 工具，而模型返回了 local_shell_call / shell 时，自动映射为 bash (Fixes #3224)
+        assert_eq!(
+            resolve_shell_tool_name("local_shell_call", &client_tools),
+            "bash"
+        );
+        assert_eq!(
+            resolve_shell_tool_name("shell_command", &client_tools),
+            "bash"
+        );
+        assert_eq!(resolve_shell_tool_name("shell", &client_tools), "bash");
+        assert_eq!(resolve_shell_tool_name("read", &client_tools), "read");
+    }
+
+    #[test]
+    fn test_malformed_function_call_never_injects_hardcoded_online_prompt() {
+        let gemini_resp = json!({
+            "candidates": [{
+                "content": {
+                    "parts": []
+                },
+                "finishReason": "MALFORMED_FUNCTION_CALL"
+            }],
+            "modelVersion": "gemini-3.7-flash",
+            "responseId": "resp_malformed"
+        });
+
+        let result = transform_openai_response(&gemini_resp, Some("session-123"), 1, None);
+        assert_eq!(result.choices.len(), 1);
+        assert_eq!(result.choices[0].finish_reason, Some("stop".to_string()));
+        assert!(result.choices[0].message.content.is_none());
+    }
+
+    #[test]
+    fn test_tool_calls_response_finish_reason_is_tool_calls() {
         let gemini_resp = json!({
             "candidates": [{
                 "content": {
                     "parts": [{
                         "functionCall": {
-                            "name": "PowerShell",
-                            "args": {
-                                "description": "查看当前系统信息"
-                            }
+                            "name": "read_file",
+                            "args": { "path": "src/main.rs" }
                         }
                     }]
                 },
                 "finishReason": "STOP"
-            }]
+            }],
+            "modelVersion": "gemini-2.5-flash",
+            "responseId": "resp_tool"
         });
 
-        let result = transform_openai_response(&gemini_resp, None, 1, None);
-        let tool_calls = result.choices[0].message.tool_calls.as_ref().unwrap();
-        assert_eq!(tool_calls.len(), 1);
-        assert_eq!(tool_calls[0].function.as_ref().unwrap().name, "PowerShell");
-
-        let parsed_args: Value =
-            serde_json::from_str(&tool_calls[0].function.as_ref().unwrap().arguments).unwrap();
+        let result = transform_openai_response(&gemini_resp, Some("session-123"), 1, None);
+        assert_eq!(result.choices.len(), 1);
         assert_eq!(
-            parsed_args["command"],
-            "echo \"[OK: Action logged - 查看当前系统信息]\""
+            result.choices[0].finish_reason,
+            Some("tool_calls".to_string())
         );
-    }
-
-    #[test]
-    fn test_normalize_and_sanitize_tool_args_dsh_pwsh_missing_description() {
-        // [Issue #3440] DSH tool-pwsh requires both command AND description
-        let mut args = json!({
-            "command": "Get-ChildItem -Path ./src -Recurse | Select-Object -First 10"
-        });
-        normalize_and_sanitize_tool_args("pwsh", &mut args);
-        assert_eq!(
-            args["command"],
-            "Get-ChildItem -Path ./src -Recurse | Select-Object -First 10"
-        );
-        assert!(args.get("description").is_some());
-        assert!(args["description"].as_str().unwrap().starts_with("Run: "));
-    }
-
-    #[test]
-    fn test_normalize_and_sanitize_tool_args_dsh_pwsh_command_in_description() {
-        // [Issue #3440] Gemini puts actual command inside description
-        let mut args = json!({
-            "description": "git status -s"
-        });
-        normalize_and_sanitize_tool_args("pwsh", &mut args);
-        assert_eq!(args["command"], "git status -s");
-        assert_eq!(args["description"], "git status -s");
-    }
-
-    #[test]
-    fn test_normalize_and_sanitize_tool_args_dsh_workflow_flattened() {
-        // [Issue #3440] DSH tool-workflow requires script and meta: { name, description }
-        let mut args = json!({
-            "script": "console.log('running test');",
-            "name": "run_test",
-            "description": "Run unit test suite"
-        });
-        normalize_and_sanitize_tool_args("workflow", &mut args);
-        assert_eq!(args["script"], "console.log('running test');");
-        assert!(args.get("meta").is_some());
-        assert_eq!(args["meta"]["name"], "run_test");
-        assert_eq!(args["meta"]["description"], "Run unit test suite");
-        assert!(!args.as_object().unwrap().contains_key("name"));
-    }
-
-    #[test]
-    fn test_normalize_and_sanitize_tool_args_dsh_workflow_missing_meta() {
-        let mut args = json!({
-            "code": "// Auto workflow\nreturn 42;"
-        });
-        normalize_and_sanitize_tool_args("workflow", &mut args);
-        assert_eq!(args["script"], "// Auto workflow\nreturn 42;");
-        assert_eq!(args["meta"]["name"], "dsh_workflow_task");
-        assert_eq!(args["meta"]["description"], "Auto workflow");
+        assert!(result.choices[0].message.tool_calls.is_some());
     }
 }

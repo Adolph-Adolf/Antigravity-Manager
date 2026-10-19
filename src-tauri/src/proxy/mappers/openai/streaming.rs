@@ -5,8 +5,12 @@ use futures::{Stream, StreamExt};
 use rand::Rng;
 use serde_json::{json, Value};
 use std::pin::Pin;
-use tracing::debug;
 use uuid::Uuid;
+
+use crate::proxy::mappers::error_classifier::{
+    preview_payload, report_stream_error, StreamErrorReport,
+};
+use crate::proxy::pipeline::{run_stream_lifecycle, ProtocolStreamHandler, StreamLifecycleConfig};
 
 /// 保存 thoughtSignature 到会话缓存
 pub fn store_thought_signature(sig: &str, session_id: &str, message_count: usize) {
@@ -35,6 +39,7 @@ pub fn store_thought_signature(sig: &str, session_id: &str, message_count: usize
 /// Key semantic difference:
 /// - Old format: candidatesTokenCount = all output tokens (text + thinking + tool)
 /// - New format: total_output_tokens = text + tool output only; thought tokens are separate (total_thought_tokens)
+///
 /// For Codex, we must sum them back together as `completion_tokens`.
 fn extract_usage_metadata(u: &Value) -> Option<super::models::OpenAIUsage> {
     let canonical = crate::proxy::pipeline::CanonicalUsage::from_gemini(u);
@@ -47,8 +52,9 @@ fn extract_usage_metadata(u: &Value) -> Option<super::models::OpenAIUsage> {
     Some(usage)
 }
 
+#[allow(dead_code)]
 pub fn create_openai_sse_stream<S, E>(
-    mut gemini_stream: Pin<Box<S>>,
+    gemini_stream: Pin<Box<S>>,
     model: String,
     session_id: String,
     message_count: usize,
@@ -59,294 +65,423 @@ where
     S: Stream<Item = Result<Bytes, E>> + Send + ?Sized + 'static,
     E: std::fmt::Display + Send + 'static,
 {
-    let mut buffer = BytesMut::new();
-    let stream_id = format!("chatcmpl-{}", Uuid::new_v4());
-    let created_ts = Utc::now().timestamp();
+    create_openai_sse_stream_with_anchor(
+        gemini_stream,
+        model,
+        session_id,
+        message_count,
+        client_tool_names,
+        include_usage,
+        None,
+    )
+}
 
-    let empty_set = std::collections::HashSet::new();
-    let client_tool_names = client_tool_names.unwrap_or(empty_set);
+/// OpenAI Chat 协议流渲染器（实现 ProtocolStreamHandler Trait）
+pub struct OpenAIChatStreamHandler {
+    pub stream_id: String,
+    pub created_ts: i64,
+    pub model: String,
+    pub session_id: String,
+    pub message_count: usize,
+    pub client_tool_names: std::collections::HashSet<String>,
+    pub include_usage: bool,
+    pub emitted_tool_calls: std::collections::HashSet<String>,
+    pub final_usage: Option<super::models::OpenAIUsage>,
+    pub tool_call_index: usize,
+    pub thinking_acc: crate::proxy::thinking_store::TurnAccumulator,
+    pub has_content: bool,
+    pub has_thinking: bool,
+    pub is_thinking_active: bool,
+}
 
-    let stream = async_stream::stream! {
-        let mut emitted_tool_calls = std::collections::HashSet::new();
-        let mut final_usage: Option<super::models::OpenAIUsage> = None;
-        let mut error_occurred = false;
-        let mut has_emitted_content = false;
-        let mut tool_call_index = 0;
-        let mut thinking_acc = crate::proxy::thinking_store::TurnAccumulator::new();
+impl ProtocolStreamHandler for OpenAIChatStreamHandler {
+    fn process_line(&mut self, line: &str) -> Vec<Bytes> {
+        if !line.starts_with("data: ") {
+            return Vec::new();
+        }
+        let json_part = line.trim_start_matches("data: ").trim();
+        if json_part.is_empty() || json_part == "[DONE]" {
+            return Vec::new();
+        }
 
-        let mut heartbeat_interval = tokio::time::interval(std::time::Duration::from_secs(15));
-        heartbeat_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let mut chunks = Vec::new();
+        if let Ok(mut json) = serde_json::from_str::<Value>(json_part) {
+            let actual_data = if let Some(inner) = json.get_mut("response").map(|v| v.take()) {
+                inner
+            } else {
+                json
+            };
+            if let Some(u) = actual_data.get("usageMetadata") {
+                self.final_usage = extract_usage_metadata(u);
+            }
 
-        loop {
-            tokio::select! {
-                item = gemini_stream.next() => {
-                    match item {
-                        Some(Ok(bytes)) => {
-                            buffer.extend_from_slice(&bytes);
-                            while let Some(pos) = buffer.iter().position(|&b| b == b'\n') {
-                                let line_raw = buffer.split_to(pos + 1);
-                                if let Ok(line_str) = std::str::from_utf8(&line_raw) {
-                                    let line = line_str.trim();
-                                    if line.is_empty() { continue; }
-                                    if line.starts_with("data: ") {
-                                        let json_part = line.trim_start_matches("data: ").trim();
-                                        if json_part == "[DONE]" { continue; }
-                                        if let Ok(mut json) = serde_json::from_str::<Value>(json_part) {
-                                            let actual_data = if let Some(inner) = json.get_mut("response").map(|v| v.take()) { inner } else { json };
-                                            if let Some(u) = actual_data.get("usageMetadata") {
-                                                final_usage = extract_usage_metadata(u);
-                                            }
+            if let Some(candidates) = actual_data.get("candidates").and_then(|c| c.as_array()) {
+                if !candidates.is_empty() {
+                    tracing::debug!("[Stream-Debug] Raw Candidate: {:?}", candidates[0]);
+                }
+                for (idx, candidate) in candidates.iter().enumerate() {
+                    let parts = candidate
+                        .get("content")
+                        .and_then(|c| c.get("parts"))
+                        .and_then(|p| p.as_array());
+                    let mut content_out = String::new();
+                    let mut thought_out = String::new();
 
-                                            if let Some(candidates) = actual_data.get("candidates").and_then(|c| c.as_array()) {
-                                                // [DEBUG] 打印原始 candidate 以排查空回复问题
-                                                if candidates.len() > 0 {
-                                                     tracing::debug!("[Stream-Debug] Raw Candidate: {:?}", candidates[0]);
-                                                }
-                                                for (idx, candidate) in candidates.iter().enumerate() {
-                                                    let parts = candidate.get("content").and_then(|c| c.get("parts")).and_then(|p| p.as_array());
-                                                    let mut content_out = String::new();
-                                                    let mut thought_out = String::new();
+                    if let Some(parts_list) = parts {
+                        for part in parts_list {
+                            self.thinking_acc.ingest_part(part);
+                            let is_thought_part = part
+                                .get("thought")
+                                .and_then(|v| v.as_bool())
+                                .unwrap_or(false);
+                            if let Some(text) = part.get("text").and_then(|t| t.as_str()) {
+                                if is_thought_part {
+                                    let clean_text = text
+                                        .replace("<think>\n", "")
+                                        .replace("<think>", "")
+                                        .replace("\n</think>", "")
+                                        .replace("</think>", "");
+                                    thought_out.push_str(&clean_text);
+                                } else {
+                                    content_out.push_str(text);
+                                }
+                            }
+                            if let Some(sig) = part
+                                .get("thoughtSignature")
+                                .or(part.get("thought_signature"))
+                                .and_then(|s| s.as_str())
+                            {
+                                store_thought_signature(sig, &self.session_id, self.message_count);
+                            }
+                            if let Some(img) = part.get("inlineData") {
+                                let mime_type = img
+                                    .get("mimeType")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("image/png");
+                                let data = img.get("data").and_then(|v| v.as_str()).unwrap_or("");
+                                if !data.is_empty() {
+                                    content_out.push_str(&format!(
+                                        "![image](data:{};base64,{})",
+                                        mime_type, data
+                                    ));
+                                }
+                            }
+                            if let Some(func_call) = part.get("functionCall") {
+                                let call_key = serde_json::to_string(func_call).unwrap_or_default();
+                                if !self.emitted_tool_calls.contains(&call_key) {
+                                    self.emitted_tool_calls.insert(call_key);
+                                    let name = func_call
+                                        .get("name")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or("unknown");
+                                    let mut args =
+                                        func_call.get("args").unwrap_or(&json!({})).clone();
 
-                                                    if let Some(parts_list) = parts {
-                                                        for part in parts_list {
-                                                            thinking_acc.ingest_part(part);
-                                                            let is_thought_part = part.get("thought").and_then(|v| v.as_bool()).unwrap_or(false);
-                                                            if let Some(text) = part.get("text").and_then(|t| t.as_str()) {
-                                                                let clean_text = text.replace("<think>\n", "").replace("<think>", "").replace("\n</think>", "").replace("</think>", "");
-                                                                if is_thought_part {
-                                                                    // thought 内容只写入 thought_out（给支持 reasoning_content 的客户端），防止客户端重复显示思维过程
-                                                                    thought_out.push_str(&clean_text);
-                                                                }
-                                                                else { content_out.push_str(&clean_text); }
-                                                            }
-                                                            if let Some(sig) = part.get("thoughtSignature").or(part.get("thought_signature")).and_then(|s| s.as_str()) {
-                                                                store_thought_signature(sig, &session_id, message_count);
-                                                            }
-                                                            if let Some(img) = part.get("inlineData") {
-                                                                let mime_type = img.get("mimeType").and_then(|v| v.as_str()).unwrap_or("image/png");
-                                                                let data = img.get("data").and_then(|v| v.as_str()).unwrap_or("");
-                                                                if !data.is_empty() {
-                                                                    content_out.push_str(&format!("![image](data:{};base64,{})", mime_type, data));
-                                                                }
-                                                            }
-                                                            if let Some(func_call) = part.get("functionCall") {
-                                                                let call_key = serde_json::to_string(func_call).unwrap_or_default();
-                                                                if !emitted_tool_calls.contains(&call_key) {
-                                                                    emitted_tool_calls.insert(call_key);
-                                                                    let name = func_call.get("name").and_then(|v| v.as_str()).unwrap_or("unknown");
-                                                                    let mut args = func_call.get("args").unwrap_or(&json!({})).clone();
+                                    super::response::normalize_and_sanitize_tool_args(
+                                        name, &mut args,
+                                    );
 
-                                                                    // [FIX #1575 & #3430] 标准化并清洗 shell / PowerShell 等工具参数名称与必填字段
-                                                                    super::response::normalize_and_sanitize_tool_args(name, &mut args);
+                                    let final_name = super::response::resolve_shell_tool_name(
+                                        name,
+                                        &self.client_tool_names,
+                                    );
 
-                                                                    let final_name = super::response::resolve_shell_tool_name(name, &client_tool_names);
+                                    let call_id = func_call
+                                        .get("id")
+                                        .and_then(|v| v.as_str())
+                                        .map(|s| s.to_string())
+                                        .unwrap_or_else(|| {
+                                            let mut hasher =
+                                                std::collections::hash_map::DefaultHasher::new();
+                                            use std::hash::{Hash, Hasher};
+                                            serde_json::to_string(func_call)
+                                                .unwrap_or_default()
+                                                .hash(&mut hasher);
+                                            self.tool_call_index.hash(&mut hasher);
+                                            std::time::SystemTime::now()
+                                                .duration_since(std::time::UNIX_EPOCH)
+                                                .unwrap_or_default()
+                                                .as_nanos()
+                                                .hash(&mut hasher);
+                                            format!("call_{:x}", hasher.finish())
+                                        });
 
-                                                                    let call_id = func_call
-                                                                        .get("id")
-                                                                        .and_then(|v| v.as_str())
-                                                                        .map(|s| s.to_string())
-                                                                        .unwrap_or_else(|| {
-                                                                            let mut hasher = std::collections::hash_map::DefaultHasher::new();
-                                                                            use std::hash::{Hash, Hasher};
-                                                                            serde_json::to_string(func_call).unwrap_or_default().hash(&mut hasher);
-                                                                            format!("call_{:x}", hasher.finish())
-                                                                        });
-
-                                                                    if let Some(sig) = part.get("thoughtSignature").or(part.get("thought_signature")).and_then(|s| s.as_str()) {
-                                                                        crate::proxy::SignatureCache::global().cache_tool_signature(&call_id, sig.to_string());
-                                                                    }
-                                                                    thinking_acc.record_tool_id(name, &call_id);
-
-                                                                    let args_str = serde_json::to_string(&args).unwrap_or_default();
-                                                                    let tool_call_chunk = json!({
-                                                                        "id": &stream_id,
-                                                                        "object": "chat.completion.chunk",
-                                                                        "created": created_ts,
-                                                                        "model": &model,
-                                                                        "choices": [{
-                                                                            "index": idx as u32,
-                                                                            "delta": {
-                                                                                "role": "assistant",
-                                                                                "tool_calls": [{
-                                                                                    "index": tool_call_index,
-                                                                                    "id": call_id,
-                                                                                    "type": "function",
-                                                                                    "function": { "name": final_name, "arguments": args_str }
-                                                                                }]
-                                                                            },
-                                                                            "finish_reason": serde_json::Value::Null
-                                                                        }]
-                                                                    });
-
-                                                                    tool_call_index += 1;
-                                                                    let sse_out = format!("data: {}\n\n", serde_json::to_string(&tool_call_chunk).unwrap_or_default());
-                                                                    yield Ok::<Bytes, String>(Bytes::from(sse_out));
-                                                                }
-                                                            }
-                                                        }
-                                                    }
-
-                                                    if let Some(grounding) = candidate.get("groundingMetadata") {
-                                                        let mut grounding_text = String::new();
-                                                        if let Some(queries) = grounding.get("webSearchQueries").and_then(|q| q.as_array()) {
-                                                            let query_list: Vec<&str> = queries.iter().filter_map(|v| v.as_str()).collect();
-                                                            if !query_list.is_empty() {
-                                                                grounding_text.push_str("\n\n---\n**🔍 已为您搜索：** ");
-                                                                grounding_text.push_str(&query_list.join(", "));
-                                                            }
-                                                        }
-                                                        if let Some(chunks) = grounding.get("groundingChunks").and_then(|c| c.as_array()) {
-                                                            let mut links = Vec::new();
-                                                            for (i, chunk) in chunks.iter().enumerate() {
-                                                                if let Some(web) = chunk.get("web") {
-                                                                    let title = web.get("title").and_then(|v| v.as_str()).unwrap_or("网页来源");
-                                                                    let uri = web.get("uri").and_then(|v| v.as_str()).unwrap_or("#");
-                                                                    links.push(format!("[{}] [{}]({})", i + 1, title, uri));
-                                                                }
-                                                            }
-                                                            if !links.is_empty() {
-                                                                grounding_text.push_str("\n\n**🌐 来源引文：**\n");
-                                                                grounding_text.push_str(&links.join("\n"));
-                                                            }
-                                                        }
-                                                        if !grounding_text.is_empty() { content_out.push_str(&grounding_text); }
-                                                    }
-
-                                                    let raw_finish_reason = candidate.get("finishReason").and_then(|f| f.as_str());
-                                                    let is_malformed_function_call = raw_finish_reason == Some("MALFORMED_FUNCTION_CALL");
-
-                                                    let gemini_finish_reason = raw_finish_reason.map(|f| match f {
-                                                        "STOP" => "stop",
-                                                        "MAX_TOKENS" => "length",
-                                                        "SAFETY" => "content_filter",
-                                                        "RECITATION" => "content_filter",
-                                                        "MALFORMED_FUNCTION_CALL" => "stop",
-                                                        _ => "stop",
-                                                    });
-
-                                                    // [FIX #1575] 如果发射了工具调用，强制设置为 tool_calls
-                                                    // 解决 Gemini 返回 STOP 但有工具调用时，OpenAI 客户端认为对话已结束的问题
-                                                    let finish_reason = if !emitted_tool_calls.is_empty() && gemini_finish_reason.is_some() {
-                                                        Some("tool_calls")
-                                                    } else {
-                                                        gemini_finish_reason
-                                                    };
-
-                                                    // [FIX MALFORMED_FUNCTION_CALL] 若模型试图调用未配置的内部工具或格式异常导致提前中断，
-                                                    // 且未生成正文内容，自动注入友好提示，避免客户端显示空白
-                                                    if is_malformed_function_call && content_out.is_empty() && !has_emitted_content {
-                                                        content_out.push_str("很抱歉，当前模型在尝试调取实时信息时遇到了格式异常。若需要查询实时天气或最新资讯，请尝试使用联网模式（模型名带 -online 后缀）或配置天气/搜索插件。");
-                                                    }
-
-                                                    if !thought_out.is_empty() {
-                                                        let reasoning_chunk = json!({
-                                                            "id": &stream_id,
-                                                            "object": "chat.completion.chunk",
-                                                            "created": created_ts,
-                                                            "model": &model,
-                                                            "choices": [{
-                                                                "index": idx as u32,
-                                                                "delta": { "role": "assistant", "content": serde_json::Value::Null, "reasoning_content": thought_out },
-                                                                "finish_reason": serde_json::Value::Null
-                                                            }]
-                                                        });
-                                                        let sse_out = format!("data: {}\n\n", serde_json::to_string(&reasoning_chunk).unwrap_or_default());
-                                                        yield Ok::<Bytes, String>(Bytes::from(sse_out));
-                                                    }
-
-                                                    if !content_out.is_empty() || finish_reason.is_some() {
-                                                        if !content_out.is_empty() {
-                                                            has_emitted_content = true;
-                                                        }
-                                                        let mut openai_chunk = json!({
-                                                            "id": &stream_id,
-                                                            "object": "chat.completion.chunk",
-                                                            "created": created_ts,
-                                                            "model": &model,
-                                                            "choices": [{
-                                                                "index": idx as u32,
-                                                                "delta": { "content": content_out },
-                                                                "finish_reason": finish_reason
-                                                            }]
-                                                        });
-                                                        if finish_reason.is_some() {
-                                                            if !include_usage {
-                                                                if let Some(ref usage) = final_usage {
-                                                                    openai_chunk["usage"] = serde_json::to_value(usage).unwrap();
-                                                                }
-                                                                final_usage = None;
-                                                            }
-                                                        }
-                                                        let sse_out = format!("data: {}\n\n", serde_json::to_string(&openai_chunk).unwrap_or_default());
-                                                        yield Ok::<Bytes, String>(Bytes::from(sse_out));
-                                                    }
-                                                }
-                                            }
-                                        }
+                                    if let Some(sig) = part
+                                        .get("thoughtSignature")
+                                        .or(part.get("thought_signature"))
+                                        .and_then(|s| s.as_str())
+                                    {
+                                        crate::proxy::SignatureCache::global()
+                                            .cache_tool_signature(
+                                                &self.session_id,
+                                                &call_id,
+                                                sig.to_string(),
+                                            );
                                     }
+                                    self.thinking_acc.record_tool_id(name, &call_id);
+
+                                    let args_str = serde_json::to_string(&args).unwrap_or_default();
+                                    let tool_call_chunk = json!({
+                                        "id": &self.stream_id,
+                                        "object": "chat.completion.chunk",
+                                        "created": self.created_ts,
+                                        "model": &self.model,
+                                        "choices": [{
+                                            "index": idx as u32,
+                                            "delta": {
+                                                "role": "assistant",
+                                                "tool_calls": [{
+                                                    "index": self.tool_call_index,
+                                                    "id": call_id,
+                                                    "type": "function",
+                                                    "function": { "name": final_name, "arguments": args_str }
+                                                }]
+                                            },
+                                            "finish_reason": serde_json::Value::Null
+                                        }]
+                                    });
+
+                                    self.tool_call_index += 1;
+                                    self.has_content = true;
+                                    self.is_thinking_active = false;
+                                    let sse_out = format!(
+                                        "data: {}\n\n",
+                                        serde_json::to_string(&tool_call_chunk).unwrap_or_default()
+                                    );
+                                    chunks.push(Bytes::from(sse_out));
                                 }
                             }
                         }
-                        Some(Err(e)) => {
-                            use crate::proxy::mappers::error_classifier::classify_stream_error;
-                            let (error_type, user_msg, i18n_key) = classify_stream_error(&e);
-                            tracing::error!("OpenAI Stream Error: {}", e);
-                            let error_chunk = json!({
-                                "id": &stream_id, "object": "chat.completion.chunk", "created": created_ts, "model": &model, "choices": [],
-                                "error": { "type": error_type, "message": user_msg, "code": "stream_error", "i18n_key": i18n_key }
-                            });
-                            yield Ok(Bytes::from(format!("data: {}\n\n", serde_json::to_string(&error_chunk).unwrap_or_default())));
-                            yield Ok(Bytes::from("data: [DONE]\n\n"));
-                            error_occurred = true;
-                            break;
+                    }
+
+                    if let Some(grounding) = candidate.get("groundingMetadata") {
+                        let mut grounding_text = String::new();
+                        if let Some(queries) =
+                            grounding.get("webSearchQueries").and_then(|q| q.as_array())
+                        {
+                            let query_list: Vec<&str> =
+                                queries.iter().filter_map(|v| v.as_str()).collect();
+                            if !query_list.is_empty() {
+                                grounding_text.push_str("\n\n---\n**🔍 已为您搜索：** ");
+                                grounding_text.push_str(&query_list.join(", "));
+                            }
                         }
-                        None => break,
+                        if let Some(g_chunks) =
+                            grounding.get("groundingChunks").and_then(|c| c.as_array())
+                        {
+                            let mut links = Vec::new();
+                            for (i, chunk) in g_chunks.iter().enumerate() {
+                                if let Some(web) = chunk.get("web") {
+                                    let title = web
+                                        .get("title")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or("网页来源");
+                                    let uri =
+                                        web.get("uri").and_then(|v| v.as_str()).unwrap_or("#");
+                                    links.push(format!("[{}] [{}]({})", i + 1, title, uri));
+                                }
+                            }
+                            if !links.is_empty() {
+                                grounding_text.push_str("\n\n**🌐 来源引文：**\n");
+                                grounding_text.push_str(&links.join("\n"));
+                            }
+                        }
+                        if !grounding_text.is_empty() {
+                            content_out.push_str(&grounding_text);
+                        }
                     }
-                }
-                _ = heartbeat_interval.tick() => {
-                    yield Ok::<Bytes, String>(Bytes::from(": ping\n\n"));
-                }
-            }
-        }
 
-        // [FIX #1732] Flush remaining buffer to prevent hang on network fragmentation
-        if !buffer.is_empty() {
-            if let Ok(line_str) = std::str::from_utf8(&buffer) {
-                let line = line_str.trim();
-                if !line.is_empty() && line.starts_with("data: ") {
-                    let json_part = line.trim_start_matches("data: ").trim();
-                    if json_part != "[DONE]" {
-                        // Re-use logic for processing the last line
-                        // (Note: In a more complex refactor we'd extract this to a function,
-                        // but for a targeted fix, processing the terminal data chunk is safer)
-                        tracing::debug!("[OpenAI-SSE] Flushing remaining {} bytes in buffer", buffer.len());
-                    }
-                }
-            }
-        }
+                    let raw_finish_reason = candidate.get("finishReason").and_then(|f| f.as_str());
 
-        thinking_acc.commit(&session_id);
-        if !error_occurred {
-            // [CRITICAL FIX #3455] Only emit standalone usage chunk with empty choices if client explicitly
-            // requested stream_options.include_usage: true. Emitting choices: [] unconditionally causes Python
-            // OpenAI SDK and autonomous agents (Hermes, etc.) to crash with `IndexError: list index out of range`!
-            if include_usage {
-                if let Some(usage) = final_usage.take() {
-                    let usage_chunk = json!({
-                        "id": &stream_id,
-                        "object": "chat.completion.chunk",
-                        "created": created_ts,
-                        "model": &model,
-                        "choices": [],
-                        "usage": usage
+                    let gemini_finish_reason = raw_finish_reason.map(|f| match f {
+                        "STOP" => "stop",
+                        "MAX_TOKENS" => "length",
+                        "SAFETY" => "content_filter",
+                        "RECITATION" => "content_filter",
+                        "MALFORMED_FUNCTION_CALL" => "stop",
+                        _ => "stop",
                     });
-                    yield Ok::<Bytes, String>(Bytes::from(format!("data: {}\n\n", serde_json::to_string(&usage_chunk).unwrap_or_default())));
+
+                    let finish_reason =
+                        if !self.emitted_tool_calls.is_empty() && gemini_finish_reason.is_some() {
+                            Some("tool_calls")
+                        } else {
+                            gemini_finish_reason
+                        };
+
+                    if !thought_out.is_empty() {
+                        self.has_thinking = true;
+                        self.is_thinking_active = true;
+                        let reasoning_chunk = json!({
+                            "id": &self.stream_id,
+                            "object": "chat.completion.chunk",
+                            "created": self.created_ts,
+                            "model": &self.model,
+                            "choices": [{
+                                "index": idx as u32,
+                                "delta": { "role": "assistant", "content": serde_json::Value::Null, "reasoning_content": thought_out },
+                                "finish_reason": serde_json::Value::Null
+                            }]
+                        });
+                        let sse_out = format!(
+                            "data: {}\n\n",
+                            serde_json::to_string(&reasoning_chunk).unwrap_or_default()
+                        );
+                        chunks.push(Bytes::from(sse_out));
+                    }
+
+                    if !content_out.is_empty() || finish_reason.is_some() {
+                        self.is_thinking_active = false;
+                        if !content_out.is_empty() {
+                            self.has_content = true;
+                        }
+                        let delta = if !content_out.is_empty() {
+                            json!({ "content": content_out })
+                        } else {
+                            json!({})
+                        };
+                        let mut openai_chunk = json!({
+                            "id": &self.stream_id,
+                            "object": "chat.completion.chunk",
+                            "created": self.created_ts,
+                            "model": &self.model,
+                            "choices": [{
+                                "index": idx as u32,
+                                "delta": delta,
+                                "finish_reason": finish_reason
+                            }]
+                        });
+                        if finish_reason.is_some() && !self.include_usage {
+                            if let Some(ref usage) = self.final_usage {
+                                openai_chunk["usage"] = serde_json::to_value(usage).unwrap();
+                            }
+                            self.final_usage = None;
+                        }
+                        let sse_out = format!(
+                            "data: {}\n\n",
+                            serde_json::to_string(&openai_chunk).unwrap_or_default()
+                        );
+                        chunks.push(Bytes::from(sse_out));
+                    }
                 }
             }
-            yield Ok::<Bytes, String>(Bytes::from("data: [DONE]\n\n"));
+        } else {
+            report_sse_json_parse(
+                "openai",
+                "create_openai_sse_stream_with_anchor",
+                json_part,
+                format!(
+                    "model={} session={} messages={}",
+                    self.model, self.session_id, self.message_count
+                ),
+            );
         }
+
+        chunks
+    }
+
+    fn has_content(&self) -> bool {
+        self.has_content
+    }
+
+    fn has_thinking(&self) -> bool {
+        self.has_thinking
+    }
+
+    fn is_thinking_active(&self) -> bool {
+        self.is_thinking_active
+    }
+
+    fn emit_finalize(&mut self) -> Vec<Bytes> {
+        let mut chunks = Vec::new();
+        if self.include_usage {
+            if let Some(usage) = self.final_usage.take() {
+                let usage_chunk = json!({
+                    "id": &self.stream_id,
+                    "object": "chat.completion.chunk",
+                    "created": self.created_ts,
+                    "model": &self.model,
+                    "choices": [],
+                    "usage": usage
+                });
+                chunks.push(Bytes::from(format!(
+                    "data: {}\n\n",
+                    serde_json::to_string(&usage_chunk).unwrap_or_default()
+                )));
+            }
+        }
+        chunks.push(Bytes::from("data: [DONE]\n\n"));
+        chunks
+    }
+
+    fn emit_initial_error(&mut self, error_report: &StreamErrorReport) -> Vec<Bytes> {
+        vec![
+            Bytes::from(openai_chat_error_frame(
+                &self.stream_id,
+                self.created_ts,
+                &self.model,
+                "chat.completion.chunk",
+                error_report,
+            )),
+            Bytes::from("data: [DONE]\n\n"),
+        ]
+    }
+
+    fn on_finish(&mut self) {
+        let acc = std::mem::take(&mut self.thinking_acc);
+        acc.commit(&self.session_id);
+    }
+}
+
+pub fn create_openai_sse_stream_with_anchor<S, E>(
+    gemini_stream: Pin<Box<S>>,
+    model: String,
+    session_id: String,
+    message_count: usize,
+    client_tool_names: Option<std::collections::HashSet<String>>,
+    include_usage: bool,
+    causal_anchor: Option<String>,
+) -> Pin<Box<dyn Stream<Item = Result<Bytes, String>> + Send>>
+where
+    S: Stream<Item = Result<Bytes, E>> + Send + ?Sized + 'static,
+    E: std::fmt::Display + Send + 'static,
+{
+    let stream_id = format!("chatcmpl-{}", Uuid::new_v4());
+    let created_ts = Utc::now().timestamp();
+    let empty_set = std::collections::HashSet::new();
+    let client_tool_names = client_tool_names.unwrap_or(empty_set);
+    let thinking_acc = if let Some(ref a) = causal_anchor {
+        crate::proxy::thinking_store::TurnAccumulator::with_anchor(a)
+    } else {
+        crate::proxy::thinking_store::TurnAccumulator::new()
     };
-    Box::pin(stream)
+
+    let trace_info = format!(
+        "model={} session={} messages={}",
+        model, session_id, message_count
+    );
+
+    let handler = OpenAIChatStreamHandler {
+        stream_id,
+        created_ts,
+        model,
+        session_id,
+        message_count,
+        client_tool_names,
+        include_usage,
+        emitted_tool_calls: std::collections::HashSet::new(),
+        final_usage: None,
+        tool_call_index: 0,
+        thinking_acc,
+        has_content: false,
+        has_thinking: false,
+        is_thinking_active: false,
+    };
+
+    let config =
+        StreamLifecycleConfig::new("openai", "create_openai_sse_stream_with_anchor", trace_info);
+
+    run_stream_lifecycle(gemini_stream, handler, config)
 }
 
 pub fn create_legacy_sse_stream<S, E>(
@@ -375,20 +510,23 @@ where
         let mut final_usage: Option<super::models::OpenAIUsage> = None;
         let mut error_occurred = false;
         let mut thinking_acc = crate::proxy::thinking_store::TurnAccumulator::new();
-        let mut heartbeat_interval = tokio::time::interval(std::time::Duration::from_secs(15));
+        let mut heartbeat_interval = tokio::time::interval(std::time::Duration::from_secs(3));
         heartbeat_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let mut last_activity = tokio::time::Instant::now();
+        let idle_timeout_secs = crate::proxy::get_stream_timeout_config().streaming_sliding_secs;
 
         loop {
             tokio::select! {
                 item = gemini_stream.next() => {
                     match item {
                         Some(Ok(bytes)) => {
+                            last_activity = tokio::time::Instant::now();
                             buffer.extend_from_slice(&bytes);
                             while let Some(pos) = buffer.iter().position(|&b| b == b'\n') {
                                 let line_raw = buffer.split_to(pos + 1);
-                                if let Ok(line_str) = std::str::from_utf8(&line_raw) {
-                                    let line = line_str.trim();
-                                    if line.is_empty() { continue; }
+                                let line_str = String::from_utf8_lossy(&line_raw);
+                                let line = line_str.trim();
+                                if line.is_empty() { continue; }
                                     if line.starts_with("data: ") {
                                         let json_part = line.trim_start_matches("data: ").trim();
                                         if json_part == "[DONE]" { continue; }
@@ -398,14 +536,18 @@ where
 
                                             let mut content_out = String::new();
                                             if let Some(candidates) = actual_data.get("candidates").and_then(|c| c.as_array()) {
-                                                if let Some(candidate) = candidates.get(0) {
+                                                if let Some(candidate) = candidates.first() {
                                                     if let Some(parts) = candidate.get("content").and_then(|c| c.get("parts")).and_then(|p| p.as_array()) {
                                                         for part in parts {
                                                             thinking_acc.ingest_part(part);
                                                             let is_thought = part.get("thought").and_then(|v| v.as_bool()).unwrap_or(false);
                                                             if let Some(text) = part.get("text").and_then(|t| t.as_str()) {
-                                                                let clean_text = text.replace("<think>\n", "").replace("<think>", "").replace("\n</think>", "").replace("</think>", "");
-                                                                content_out.push_str(&clean_text);
+                                                                if is_thought {
+                                                                    let clean_text = text.replace("<think>\n", "").replace("<think>", "").replace("\n</think>", "").replace("</think>", "");
+                                                                    content_out.push_str(&clean_text);
+                                                                } else {
+                                                                    content_out.push_str(text);
+                                                                }
                                                             }
                                                             if let Some(sig) = part.get("thoughtSignature").or(part.get("thought_signature")).and_then(|s| s.as_str()) {
                                                                 store_thought_signature(sig, &session_id, message_count);
@@ -415,7 +557,7 @@ where
                                                 }
                                             }
 
-                                            let finish_reason = actual_data.get("candidates").and_then(|c| c.as_array()).and_then(|c| c.get(0)).and_then(|c| c.get("finishReason")).and_then(|f| f.as_str()).map(|f| match f {
+                                            let finish_reason = actual_data.get("candidates").and_then(|c| c.as_array()).and_then(|c| c.first()).and_then(|c| c.get("finishReason")).and_then(|f| f.as_str()).map(|f| match f {
                                                 "STOP" => "stop", "MAX_TOKENS" => "length", "SAFETY" => "content_filter", "RECITATION" => "content_filter", _ => "stop",
                                             });
 
@@ -426,20 +568,43 @@ where
                                             if let Some(ref usage) = final_usage { legacy_chunk["usage"] = serde_json::to_value(usage).unwrap(); }
                                             if finish_reason.is_some() { final_usage = None; }
                                             yield Ok::<Bytes, String>(Bytes::from(format!("data: {}\n\n", serde_json::to_string(&legacy_chunk).unwrap_or_default())));
+                                        } else {
+                                            report_sse_json_parse(
+                                                "openai-legacy",
+                                                "create_legacy_sse_stream",
+                                                json_part,
+                                                format!(
+                                                    "model={} session={} messages={} buffer_bytes={}",
+                                                    model,
+                                                    session_id,
+                                                    message_count,
+                                                    buffer.len()
+                                                ),
+                                            );
                                         }
                                     }
                                 }
                             }
-                        }
                         Some(Err(e)) => {
-                            use crate::proxy::mappers::error_classifier::classify_stream_error;
-                            let (error_type, user_msg, i18n_key) = classify_stream_error(&e);
-                            tracing::error!("Legacy Stream Error: {}", e);
-                            let error_chunk = json!({
-                                "id": &stream_id, "object": "text_completion", "created": created_ts, "model": &model, "choices": [],
-                                "error": { "type": error_type, "message": user_msg, "code": "stream_error", "i18n_key": i18n_key }
-                            });
-                            yield Ok::<Bytes, String>(Bytes::from(format!("data: {}\n\n", serde_json::to_string(&error_chunk).unwrap_or_default())));
+                            let report = report_stream_error(
+                                "openai-legacy",
+                                "create_legacy_sse_stream",
+                                &e,
+                                format!(
+                                    "model={} session={} messages={} buffer_bytes={}",
+                                    model,
+                                    session_id,
+                                    message_count,
+                                    buffer.len()
+                                ),
+                            );
+                            yield Ok::<Bytes, String>(Bytes::from(openai_chat_error_frame(
+                                &stream_id,
+                                created_ts,
+                                &model,
+                                "text_completion",
+                                &report,
+                            )));
                             yield Ok::<Bytes, String>(Bytes::from("data: [DONE]\n\n"));
                             error_occurred = true;
                             break;
@@ -447,7 +612,38 @@ where
                         None => break,
                     }
                 }
-                _ = heartbeat_interval.tick() => { yield Ok::<Bytes, String>(Bytes::from(": ping\n\n")); }
+                _ = heartbeat_interval.tick() => {
+                    if last_activity.elapsed() >= std::time::Duration::from_secs(idle_timeout_secs) {
+                        let report = report_stream_error(
+                            "openai-legacy",
+                            "create_legacy_sse_stream",
+                            &"stream idle timeout",
+                            format!(
+                                "model={} session={} messages={} idle_secs={}",
+                                model,
+                                session_id,
+                                message_count,
+                                idle_timeout_secs
+                            ),
+                        );
+                        tracing::warn!(
+                            "[OpenAI-Legacy] Stream idle timeout after {}s (model={})",
+                            idle_timeout_secs,
+                            model
+                        );
+                        yield Ok::<Bytes, String>(Bytes::from(openai_chat_error_frame(
+                            &stream_id,
+                            created_ts,
+                            &model,
+                            "text_completion",
+                            &report,
+                        )));
+                        yield Ok::<Bytes, String>(Bytes::from("data: [DONE]\n\n"));
+                        error_occurred = true;
+                        break;
+                    }
+                    yield Ok::<Bytes, String>(Bytes::from(": ping\n\n"));
+                }
             }
         }
         thinking_acc.commit(&session_id);
@@ -456,6 +652,29 @@ where
         }
     };
     Box::pin(stream)
+}
+
+#[track_caller]
+fn report_sse_json_parse(
+    adapter: &'static str,
+    function: &'static str,
+    json_part: &str,
+    params: impl std::fmt::Display,
+) {
+    let parse_err = match serde_json::from_str::<Value>(json_part) {
+        Err(err) => err,
+        Ok(_) => return,
+    };
+    let _ = report_stream_error(
+        adapter,
+        function,
+        &format!("json parse error: {parse_err}"),
+        format!(
+            "{params} line_bytes={} preview={}",
+            json_part.len(),
+            preview_payload(json_part)
+        ),
+    );
 }
 
 fn split_namespace_tool_name(qualified_name: &str) -> (String, Option<String>) {
@@ -473,36 +692,33 @@ fn split_namespace_tool_name(qualified_name: &str) -> (String, Option<String>) {
     (name.to_string(), None)
 }
 
-fn extract_apply_patch_input(args: &Value) -> String {
-    if let Some(obj) = args.as_object() {
-        if let Some(input) = obj.get("input").and_then(|v| v.as_str()) {
-            return input.to_string();
+fn openai_chat_error_frame(
+    stream_id: &str,
+    created_ts: i64,
+    model: &str,
+    object: &str,
+    report: &StreamErrorReport,
+) -> String {
+    let error_chunk = json!({
+        "id": stream_id,
+        "object": object,
+        "created": created_ts,
+        "model": model,
+        "choices": [],
+        "error": {
+            "type": report.classified.error_type,
+            "message": report.client_message(),
+            "code": "stream_error",
+            "i18n_key": report.classified.i18n_key,
+            "function": report.function,
+            "call_site": report.call_site(),
+            "params": report.params
         }
-        if let Some(arr) = obj.get("command").and_then(|v| v.as_array()) {
-            if arr.len() > 1 {
-                if let Some(patch) = arr[1].as_str() {
-                    return patch.to_string();
-                }
-            }
-        }
-        if let Some(cmd_str) = obj.get("command").and_then(|v| v.as_str()) {
-            if let Some(patch) = cmd_str.strip_prefix("apply_patch\n") {
-                return patch.to_string();
-            }
-            if let Some(patch) = cmd_str.strip_prefix("apply_patch ") {
-                return patch.to_string();
-            }
-            return cmd_str.to_string();
-        }
-        for key in ["patch_text", "patch", "diff", "content"] {
-            if let Some(patch) = obj.get(key).and_then(|v| v.as_str()) {
-                return patch.to_string();
-            }
-        }
-    }
-    args.as_str()
-        .map(str::to_string)
-        .unwrap_or_else(|| serde_json::to_string(args).unwrap_or_default())
+    });
+    format!(
+        "data: {}\n\n",
+        serde_json::to_string(&error_chunk).unwrap_or_default()
+    )
 }
 
 fn inject_seq(mut event: Value, seq: &mut u64) -> Value {
@@ -527,6 +743,7 @@ fn codex_sse_frame(event: &Value) -> Bytes {
     Bytes::from(format!("event: {event_name}\ndata: {payload}\n\n"))
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn create_codex_sse_stream<S, E>(
     mut gemini_stream: Pin<Box<S>>,
     model: String,
@@ -590,22 +807,26 @@ where
         let mut message_output_index: u32 = 0;
         let mut reasoning_output_index: u32 = 0;
         let mut final_usage: Option<super::models::OpenAIUsage> = None;
-        let mut heartbeat_interval = tokio::time::interval(std::time::Duration::from_secs(15));
+        let mut classified_stream_error: Option<StreamErrorReport> = None;
+        let mut heartbeat_interval = tokio::time::interval(std::time::Duration::from_secs(3));
         heartbeat_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let mut last_activity = tokio::time::Instant::now();
+        let idle_timeout_secs = crate::proxy::get_stream_timeout_config().streaming_sliding_secs;
 
         loop {
             tokio::select! {
                 item = gemini_stream.next() => {
                     match item {
                         Some(Ok(bytes)) => {
+                            last_activity = tokio::time::Instant::now();
                             buffer.extend_from_slice(&bytes);
                             while let Some(pos) = buffer.iter().position(|&b| b == b'\n') {
                                 let line_raw = buffer.split_to(pos + 1);
-                                if let Ok(line_str) = std::str::from_utf8(&line_raw) {
-                                    let line = line_str.trim();
-                                    if line.is_empty() || !line.starts_with("data: ") { continue; }
-                                    let json_part = line.trim_start_matches("data: ").trim();
-                                    if json_part == "[DONE]" { continue; }
+                                let line_str = String::from_utf8_lossy(&line_raw);
+                                let line = line_str.trim();
+                                if line.is_empty() || !line.starts_with("data: ") { continue; }
+                                let json_part = line.trim_start_matches("data: ").trim();
+                                if json_part == "[DONE]" { continue; }
 
                                     if let Ok(mut json) = serde_json::from_str::<Value>(json_part) {
                                         let actual_data = if let Some(inner) = json.get_mut("response").map(|v| v.take()) { inner } else { json };
@@ -615,10 +836,10 @@ where
                                         }
 
                                         if let Some(candidates) = actual_data.get("candidates").and_then(|c| c.as_array()) {
-                                            if candidates.len() > 0 {
+                                            if !candidates.is_empty() {
                                                 tracing::debug!("[Codex-Stream-Debug] Raw Candidate: {:?}", candidates[0]);
                                             }
-                                            if let Some(candidate) = candidates.get(0) {
+                                            if let Some(candidate) = candidates.first() {
                                                 if let Some(reason) = candidate.get("finishReason").and_then(Value::as_str) {
                                                     final_finish_reason = Some(reason.to_string());
                                                 }
@@ -677,7 +898,11 @@ where
                                                         }
 
                                                         if let Some(text) = part.get("text").and_then(|t| t.as_str()) {
-                                                            let clean_text = text.replace("<think>\n", "").replace("<think>", "").replace("\n</think>", "").replace("</think>", "");
+                                                            let clean_text = if is_thought {
+                                                                text.replace("<think>\n", "").replace("<think>", "").replace("\n</think>", "").replace("</think>", "")
+                                                            } else {
+                                                                text.to_string()
+                                                            };
                                                             if !clean_text.is_empty() {
                                                                 if is_thought && message_item_emitted {
                                                                     // Once ordinary assistant text has started, it is the
@@ -768,11 +993,13 @@ where
                                                                         let mut hasher = std::collections::hash_map::DefaultHasher::new();
                                                                         use std::hash::{Hash, Hasher};
                                                                         call_key.hash(&mut hasher);
+                                                                        sequence_number.hash(&mut hasher);
+                                                                        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos().hash(&mut hasher);
                                                                         format!("call_{:x}", hasher.finish())
                                                                     });
 
                                                                 if let Some(sig) = part.get("thoughtSignature").or(part.get("thought_signature")).and_then(|s| s.as_str()) {
-                                                                    crate::proxy::SignatureCache::global().cache_tool_signature(&call_id, sig.to_string());
+                                                                    crate::proxy::SignatureCache::global().cache_tool_signature(&session_id, &call_id, sig.to_string());
                                                                 }
                                                                 thinking_acc.record_tool_id(name, &call_id);
 
@@ -780,28 +1007,7 @@ where
                                                                 let tool_item_id = format!("item-{}", &Uuid::new_v4().to_string()[..16]);
                                                                 let is_custom_tool = actual_name == "apply_patch" || actual_name == "apply_patch_v2" || actual_name == "shell";
 
-                                                                let mut final_args_str = args_str.clone();
-                                                                let mut apply_patch_repairs_value: Option<Value> = None;
-                                                                let mut apply_patch_validation: Option<(usize, String)> = None;
-                                                                if is_custom_tool && (actual_name == "apply_patch" || actual_name == "apply_patch_v2") {
-                                                                    let extracted_patch = extract_apply_patch_input(&args);
-                                                                    let (optimized_patch, repairs) =
-                                                                        crate::proxy::adapters::apply_patch_preflight::optimize_patch(
-                                                                            &extracted_patch,
-                                                                            None,
-                                                                            true,
-                                                                        );
-                                                                    if !repairs.is_empty() {
-                                                                        apply_patch_repairs_value = Some(
-                                                                            crate::proxy::adapters::apply_patch_preflight::repairs_to_value(&repairs),
-                                                                        );
-                                                                    }
-                                                                    final_args_str = optimized_patch;
-                                                                    apply_patch_validation =
-                                                                        crate::proxy::adapters::apply_patch_preflight::validate_v4a_for_codex(
-                                                                            &final_args_str,
-                                                                        );
-                                                                }
+                                                                let final_args_str = args_str.clone();
 
                                                                 let mut item_obj = json!({
                                                                     "id": &tool_item_id,
@@ -821,31 +1027,6 @@ where
 
                                                                 let tool_output_index = next_output_index;
                                                                 next_output_index += 1;
-
-                                                                if let Some((line, message)) = apply_patch_validation.as_ref() {
-                                                                    crate::proxy::adapters::apply_patch_trace::emit(
-                                                                        &crate::proxy::adapters::apply_patch_trace::ApplyPatchTrace {
-                                                                            source: "gemini_native",
-                                                                            model: &model,
-                                                                            call_id: &call_id,
-                                                                            fc_id: &tool_item_id,
-                                                                            args_raw: &args_str,
-                                                                            input: &final_args_str,
-                                                                            interrupted: false,
-                                                                            json_truncation: None,
-                                                                            v4a_truncation: None,
-                                                                            v4a_validation: Some((*line, message.as_str())),
-                                                                            decision: "incomplete",
-                                                                            repairs: apply_patch_repairs_value.as_ref(),
-                                                                        },
-                                                                    );
-                                                                    if accumulated_text.is_empty() {
-                                                                        accumulated_text = format!(
-                                                                            "apply_patch 格式非法，已停止执行以避免重复失败。第 {line} 行：{message}"
-                                                                        );
-                                                                    }
-                                                                    continue;
-                                                                }
 
                                                                 has_seen_tool_calls = true;
 
@@ -902,24 +1083,6 @@ where
                                                                 if cache_tool_calls {
                                                                     crate::proxy::handlers::openai::insert_cached_tool_call(call_id.clone(), tc_val.clone());
                                                                 }
-                                                                if is_custom_tool && (actual_name == "apply_patch" || actual_name == "apply_patch_v2") {
-                                                                    crate::proxy::adapters::apply_patch_trace::emit(
-                                                                        &crate::proxy::adapters::apply_patch_trace::ApplyPatchTrace {
-                                                                            source: "gemini_native",
-                                                                            model: &model,
-                                                                            call_id: &call_id,
-                                                                            fc_id: &tool_item_id,
-                                                                            args_raw: &args_str,
-                                                                            input: &final_args_str,
-                                                                            interrupted: false,
-                                                                            json_truncation: None,
-                                                                            v4a_truncation: None,
-                                                                            v4a_validation: None,
-                                                                            decision: "completed",
-                                                                            repairs: apply_patch_repairs_value.as_ref(),
-                                                                        },
-                                                                    );
-                                                                }
                                                                 final_outputs_map.insert(tool_output_index, tc_val);
                                                             }
                                                         }
@@ -975,16 +1138,86 @@ where
                                                     }
                                                 }
                                             }
-                                        }
+                                        } else {
+                                            report_sse_json_parse(
+                                                "openai-responses",
+                                                "create_codex_sse_stream",
+                                                json_part,
+                                                format!(
+                                                    "model={} session={} response_id={} messages={} buffer_bytes={}",
+                                                    model,
+                                                    session_id,
+                                                    response_id,
+                                                    message_count,
+                                                    buffer.len()
+                                                ),
+                                            );
                                     }
                                 }
                             }
                         }
-                        Some(Err(_)) => break,
+                        Some(Err(e)) => {
+                            let report = report_stream_error(
+                                "openai-responses",
+                                "create_codex_sse_stream",
+                                &e,
+                                format!(
+                                    "model={} session={} response_id={} messages={} buffer_bytes={}",
+                                    model,
+                                    session_id,
+                                    response_id,
+                                    message_count,
+                                    buffer.len()
+                                ),
+                            );
+                            let err_ev = json!({
+                                "type": "error",
+                                "code": report.classified.error_type,
+                                "message": report.client_message(),
+                                "function": report.function,
+                                "call_site": report.call_site(),
+                                "params": report.params,
+                            });
+                            classified_stream_error = Some(report);
+                            let err_ev = inject_seq(err_ev, &mut sequence_number);
+                            yield Ok::<Bytes, String>(codex_sse_frame(&err_ev));
+                            break;
+                        }
                         None => break,
                     }
                 }
                 _ = heartbeat_interval.tick() => {
+                    if last_activity.elapsed() >= std::time::Duration::from_secs(idle_timeout_secs) {
+                        let report = report_stream_error(
+                            "openai-codex",
+                            "create_openai_codex_stream",
+                            &"stream idle timeout",
+                            format!(
+                                "model={} session={} messages={} idle_secs={}",
+                                model,
+                                session_id,
+                                message_count,
+                                idle_timeout_secs
+                            ),
+                        );
+                        tracing::warn!(
+                            "[Codex-SSE] Stream idle timeout after {}s (model={})",
+                            idle_timeout_secs,
+                            model
+                        );
+                        let err_ev = json!({
+                            "type": "error",
+                            "code": report.classified.error_type,
+                            "message": report.client_message(),
+                            "function": report.function,
+                            "call_site": report.call_site(),
+                            "params": report.params,
+                        });
+                        classified_stream_error = Some(report);
+                        let err_ev = inject_seq(err_ev, &mut sequence_number);
+                        yield Ok::<Bytes, String>(codex_sse_frame(&err_ev));
+                        break;
+                    }
                     yield Ok::<Bytes, String>(Bytes::from(": ping\n\n"));
                 }
             }
@@ -1105,7 +1338,7 @@ where
         let final_outputs: Vec<serde_json::Value> = final_outputs_map.into_values().collect();
 
         let missing_actionable_output = !message_item_emitted && !has_seen_tool_calls;
-        let terminal_status = if missing_actionable_output {
+        let mut terminal_status = if missing_actionable_output {
             "incomplete"
         } else {
             match final_finish_reason.as_deref() {
@@ -1121,8 +1354,7 @@ where
                 _ => "completed",
             }
         };
-        let terminal_type = format!("response.{terminal_status}");
-        let incomplete_details = if terminal_status == "incomplete" {
+        let mut incomplete_details = if terminal_status == "incomplete" {
             let reason = match final_finish_reason.as_deref() {
                 Some("MAX_TOKENS") => "max_output_tokens",
                 Some("SAFETY")
@@ -1138,7 +1370,7 @@ where
         } else {
             Value::Null
         };
-        let terminal_error = if missing_actionable_output {
+        let mut terminal_error = if missing_actionable_output {
             json!({
                 "code": "empty_response",
                 "message": "Gemini stream ended without a final assistant message or tool call."
@@ -1151,6 +1383,18 @@ where
         } else {
             Value::Null
         };
+        if let Some(report) = classified_stream_error {
+            terminal_status = "failed";
+            incomplete_details = Value::Null;
+            terminal_error = json!({
+                "code": report.classified.error_type,
+                "message": report.client_message(),
+                "function": report.function,
+                "call_site": report.call_site(),
+                "params": report.params,
+            });
+        }
+        let terminal_type = format!("response.{terminal_status}");
         let completed_at = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
@@ -1251,6 +1495,61 @@ mod tests {
             .filter_map(|data| serde_json::from_str::<Value>(data).ok())
             .collect();
         (raw, events)
+    }
+
+    #[tokio::test]
+    async fn responses_midstream_body_cut_emits_classified_stream_error() {
+        let items: Vec<Result<Bytes, String>> = vec![
+            Ok(Bytes::from(
+                "data: {\"candidates\":[{\"content\":{\"parts\":[{\"thought\":true,\"text\":\"hi\"}]}}]}\n\n",
+            )),
+            Err(
+                "error reading a body from connection: connection closed before message completed"
+                    .to_string(),
+            ),
+        ];
+        let mut stream = create_codex_sse_stream(
+            Box::pin(stream::iter(items)),
+            "gemini-pro-agent".to_string(),
+            "test-codex-session".to_string(),
+            0,
+            0,
+            "resp-test-codex-session".to_string(),
+            None,
+            true,
+        );
+
+        let mut raw = String::new();
+        while let Some(item) = stream.next().await {
+            raw.push_str(&String::from_utf8_lossy(&item.expect("codex stream item")));
+        }
+        let events: Vec<Value> = raw
+            .lines()
+            .filter_map(|line| line.strip_prefix("data: "))
+            .filter_map(|data| serde_json::from_str::<Value>(data).ok())
+            .collect();
+
+        let error_ev = events
+            .iter()
+            .find(|event| event["type"] == "error")
+            .expect("classified error event");
+        assert_eq!(error_ev["code"], "stream_error");
+        let message = error_ev["message"].as_str().unwrap_or_default();
+        assert!(message.contains("Stream interrupted before completion, please retry"));
+        assert!(message.contains("fn=create_codex_sse_stream"));
+        assert!(message.contains("session=test-codex-session"));
+        assert!(message.contains("closed before message completed"));
+        assert!(
+            !message.contains("network or proxy"),
+            "mid-stream body cut must not be labeled as a connect/proxy failure"
+        );
+
+        let failed = events
+            .iter()
+            .find(|event| event["type"] == "response.failed")
+            .expect("failed response");
+        assert_eq!(failed["response"]["status"], "failed");
+        assert_eq!(failed["response"]["error"]["code"], "stream_error");
     }
 
     #[tokio::test]
@@ -1877,8 +2176,6 @@ mod tests {
                     "Crash hazard! Found empty choices: [] chunk when include_usage=false: {}",
                     json_str
                 );
-                // Verify choices[0] can be accessed without panic
-                assert!(choices.get(0).is_some());
             }
         }
     }
@@ -1955,5 +2252,73 @@ mod tests {
 
         assert!(has_reasoning, "Should stream reasoning_content");
         assert!(has_content, "Should stream content");
+    }
+
+    #[tokio::test]
+    async fn test_streaming_malformed_function_call_never_injects_hardcoded_online_prompt() {
+        let chunk_json = json!({
+            "candidates": [{
+                "content": {
+                    "parts": [
+                        { "text": "Reasoning about weather...", "thought": true }
+                    ]
+                },
+                "finishReason": "MALFORMED_FUNCTION_CALL"
+            }]
+        });
+
+        let items: Vec<Result<Bytes, reqwest::Error>> =
+            vec![Ok(Bytes::from(format!("data: {}\n\n", chunk_json)))];
+
+        let gemini_stream = Box::pin(stream::iter(items));
+
+        let mut openai_stream = create_openai_sse_stream(
+            gemini_stream,
+            "gemini-3.7-flash".to_string(),
+            "test-malformed-session".to_string(),
+            0,
+            None,
+            false,
+        );
+
+        let mut all_content = String::new();
+        let mut final_finish_reason: Option<String> = None;
+
+        while let Some(result) = openai_stream.next().await {
+            if let Ok(bytes) = result {
+                let s = String::from_utf8_lossy(&bytes).to_string();
+                for line in s.lines() {
+                    if line.starts_with("data: ") && !line.contains("[DONE]") {
+                        let json_str = line.trim_start_matches("data: ").trim();
+                        if let Ok(json) = serde_json::from_str::<Value>(json_str) {
+                            if let Some(choices) = json.get("choices").and_then(|c| c.as_array()) {
+                                if let Some(choice) = choices.first() {
+                                    if let Some(delta) = choice.get("delta") {
+                                        if let Some(c) =
+                                            delta.get("content").and_then(|c| c.as_str())
+                                        {
+                                            all_content.push_str(c);
+                                        }
+                                    }
+                                    if let Some(fr) =
+                                        choice.get("finish_reason").and_then(|f| f.as_str())
+                                    {
+                                        final_finish_reason = Some(fr.to_string());
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // 验证绝对不会被注入任何臆测性的天气/联网假文本
+        assert!(
+            all_content.is_empty(),
+            "Expected empty content, got: {}",
+            all_content
+        );
+        assert_eq!(final_finish_reason, Some("stop".to_string()));
     }
 }

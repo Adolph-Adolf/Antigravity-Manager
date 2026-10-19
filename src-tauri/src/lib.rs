@@ -75,6 +75,54 @@ fn should_enable_tray() -> bool {
     true
 }
 
+/// Login-item launches or shortcut flags pass `--minimized`, `--silent`, `--hidden`, or `-s`.
+/// Quiet startup applies only to that launch.
+fn apply_login_launch_policy(app: &tauri::App) {
+    let launched_by_login = std::env::args().any(|arg| {
+        let lower = arg.to_lowercase();
+        lower == "--minimized"
+            || lower == "--silent"
+            || lower == "--hidden"
+            || lower == "-s"
+            || lower == "/minimized"
+    });
+    if !launched_by_login {
+        return;
+    }
+
+    let config = modules::load_app_config().unwrap_or_default();
+    if !config.quiet_autostart {
+        info!("Login launch will show the main window because quiet startup is off");
+        return;
+    }
+
+    let tray_enabled = app
+        .try_state::<AppRuntimeFlags>()
+        .map(|flags| flags.tray_enabled)
+        .unwrap_or(true);
+    if !tray_enabled {
+        info!("Quiet startup skipped because the tray is unavailable; showing the main window");
+        if let Some(window) = app.get_webview_window("main") {
+            let _ = window.show();
+        }
+        return;
+    }
+
+    modules::startup_quiet::arm();
+    if config.lightweight_mode {
+        info!("Quiet login launch will enter lightweight mode once the event loop is ready");
+        modules::startup_quiet::request_lightweight_on_ready();
+    } else {
+        info!("Quiet login launch will keep the main window hidden in the tray");
+        #[cfg(target_os = "macos")]
+        {
+            let _ = app
+                .handle()
+                .set_activation_policy(tauri::ActivationPolicy::Accessory);
+        }
+    }
+}
+
 fn credential_state(value: &str) -> &'static str {
     if value.trim().is_empty() {
         "not set"
@@ -87,12 +135,14 @@ fn credential_state(value: &str) -> &'static str {
 fn nvidia_proprietary_loaded() -> bool {
     std::path::Path::new("/dev/nvidia0").exists()
         || std::path::Path::new("/proc/driver/nvidia/version").exists()
+        || std::path::Path::new("/sys/module/nvidia").exists()
 }
 
 #[cfg(target_os = "linux")]
 fn configure_linux_graphics() {
     use linux_graphics::{
-        desktop_is_wlroots_family, should_disable_webkit_dmabuf, should_force_x11_backend,
+        desktop_is_gnome, desktop_is_kde, desktop_is_wlroots_family, should_disable_webkit_dmabuf,
+        should_force_x11_backend,
     };
 
     let is_wayland = is_wayland_session();
@@ -113,14 +163,19 @@ fn configure_linux_graphics() {
         has_x11_display,
         &desktop,
     ) {
-        // Force X11 backend under GNOME/KDE Wayland to avoid a GTK shm crash.
+        // Force X11 backend under GNOME/legacy Wayland to avoid a GTK shm crash.
         std::env::set_var("GDK_BACKEND", "x11");
         warn!(
             "Forcing GDK_BACKEND=x11 for stability on Wayland. Set ANTIGRAVITY_FORCE_WAYLAND=1 to keep Wayland backend."
         );
-    } else if is_wayland && !gdk_already_set && desktop_is_wlroots_family(&desktop) {
+    } else if is_wayland
+        && !gdk_already_set
+        && (desktop_is_wlroots_family(&desktop)
+            || desktop_is_kde(&desktop)
+            || desktop_is_gnome(&desktop))
+    {
         info!(
-            "Keeping native Wayland GDK backend on {} (Xwayland DISPLAY is not a reason to force X11).",
+            "Keeping native Wayland GDK backend on {} (avoiding Xwayland WebKitGTK frame freeze).",
             desktop
         );
     }
@@ -385,6 +440,12 @@ pub fn run() {
                         }
                     }
 
+                    // Initialize Hub fingerprint from config or detection
+                    crate::modules::hub_version::update_hub_fingerprint(
+                        config.proxy.hub_version.as_deref(),
+                        config.proxy.hub_cl.as_deref(),
+                    );
+
                     // Start proxy service
                     if let Err(e) = commands::proxy::internal_start_proxy_service(
                         config.proxy,
@@ -436,13 +497,7 @@ pub fn run() {
                 .build(),
         )
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            let _ = app.get_webview_window("main").map(|window| {
-                let _ = window.show();
-                let _ = window.set_focus();
-                #[cfg(target_os = "macos")]
-                app.set_activation_policy(tauri::ActivationPolicy::Regular)
-                    .unwrap_or(());
-            });
+            let _ = modules::lightweight::exit_lightweight_mode(app);
         }))
         .manage(commands::proxy::ProxyServiceState::new())
         .manage(commands::cloudflared::CloudflaredState::new())
@@ -478,29 +533,6 @@ pub fn run() {
                 });
             }
 
-            // Linux: Workaround for transparent window crash/freeze
-            // The transparent window feature is unstable on Linux with WebKitGTK
-            // We disable the visual alpha channel to prevent softbuffer-related crashes
-            #[cfg(target_os = "linux")]
-            {
-                use tauri::Manager;
-                if is_wayland_session() {
-                    info!("Linux Wayland session detected; skipping transparent window workaround");
-                } else if let Some(window) = app.get_webview_window("main") {
-                    // Access GTK window and disable transparency at the GTK level
-                    if let Ok(gtk_window) = window.gtk_window() {
-                        use gtk::prelude::WidgetExt;
-                        // Remove the visual's alpha channel to disable transparency
-                        if let Some(screen) = gtk_window.screen() {
-                            // Use non-composited visual if available
-                            if let Some(visual) = screen.system_visual() {
-                                gtk_window.set_visual(Some(&visual));
-                            }
-                            info!("Linux: Applied transparent window workaround");
-                        }
-                    }
-                }
-            }
 
             let runtime_flags = app.state::<AppRuntimeFlags>();
             if runtime_flags.tray_enabled {
@@ -515,6 +547,10 @@ pub fn run() {
             tauri::async_runtime::spawn(async move {
                 // Load config
                 if let Ok(config) = modules::config::load_app_config() {
+                    crate::modules::hub_version::update_hub_fingerprint(
+                        config.proxy.hub_version.as_deref(),
+                        config.proxy.hub_cl.as_deref(),
+                    );
                     let state = handle.state::<commands::proxy::ProxyServiceState>();
                     let cf_state = handle.state::<commands::cloudflared::CloudflaredState>();
                     let integration =
@@ -569,6 +605,8 @@ pub fn run() {
             // [PHASE 1] 已整合至 Axum 端口 (8045)，不再单独启动 19527 端口
             info!("Management API integrated into main proxy server (port 8045)");
 
+            apply_login_launch_policy(app);
+
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -580,16 +618,25 @@ pub fn run() {
                     .unwrap_or(true);
 
                 if tray_enabled {
-                    let _ = window.hide();
-                    #[cfg(target_os = "macos")]
-                    {
-                        use tauri::Manager;
-                        window
-                            .app_handle()
-                            .set_activation_policy(tauri::ActivationPolicy::Accessory)
-                            .unwrap_or(());
-                    }
                     api.prevent_close();
+
+                    let is_lightweight = modules::load_app_config()
+                        .map(|c| c.lightweight_mode)
+                        .unwrap_or(false);
+
+                    if is_lightweight {
+                        let _ = modules::lightweight::enter_lightweight_mode(window.app_handle());
+                    } else {
+                        let _ = window.hide();
+                        #[cfg(target_os = "macos")]
+                        {
+                            use tauri::Manager;
+                            window
+                                .app_handle()
+                                .set_activation_policy(tauri::ActivationPolicy::Accessory)
+                                .unwrap_or(());
+                        }
+                    }
                 }
             }
         })
@@ -615,11 +662,13 @@ pub fn run() {
             commands::delete_device_version,
             commands::open_device_folder,
             commands::get_current_account,
+            commands::get_active_clients_status,
             // Quota commands
             commands::fetch_account_quota,
             commands::refresh_all_quotas,
             // Config commands
             commands::load_config,
+            commands::get_config,
             commands::save_config,
             // Additional commands
             commands::prepare_oauth_url,
@@ -641,6 +690,8 @@ pub fn run() {
             commands::get_antigravity_cache_paths,
             commands::open_data_folder,
             commands::get_data_dir_path,
+            commands::get_internal_error_log_path,
+            commands::get_internal_error_log_disk_size,
             commands::set_data_dir,
             commands::migrate_data_dir,
             commands::show_main_window,
@@ -649,6 +700,7 @@ pub fn run() {
             commands::get_antigravity_cli_path,
             commands::get_antigravity_args,
             commands::check_for_updates,
+            commands::check_native_update,
             commands::check_homebrew_installation,
             commands::check_appimage_installation,
             commands::brew_upgrade_cask,
@@ -671,19 +723,24 @@ pub fn run() {
             commands::proxy::get_proxy_logs_count_filtered,
             commands::proxy::get_proxy_logs_filtered,
             commands::proxy::set_proxy_monitor_enabled,
+            commands::proxy::set_proxy_capture_health_logs,
             commands::proxy::clear_proxy_logs,
+            commands::proxy::clear_thinking_store,
+            commands::proxy::get_thinking_store_count,
             commands::proxy::get_proxy_db_disk_size,
+            commands::proxy::test_model_connectivity,
             commands::proxy::generate_api_key,
             commands::proxy::reload_proxy_accounts,
             commands::proxy::update_model_mapping,
             commands::proxy::check_proxy_health,
             commands::proxy::get_proxy_pool_config,
-            commands::proxy::fetch_zai_models,
             commands::proxy::get_proxy_scheduling_config,
             commands::proxy::update_proxy_scheduling_config,
             commands::proxy::clear_proxy_session_bindings,
             commands::proxy::set_preferred_account,
             commands::proxy::get_preferred_account,
+            commands::proxy::get_hub_fingerprint,
+            commands::proxy::detect_remote_hub_fingerprint,
             commands::proxy::clear_proxy_rate_limit,
             commands::proxy::clear_all_proxy_rate_limits,
             // Proxy Pool Binding commands
@@ -698,18 +755,22 @@ pub fn run() {
             commands::warm_up_all_accounts,
             commands::warm_up_account,
             commands::update_account_label,
+            commands::update_account_priority,
             // HTTP API settings commands
             commands::get_http_api_settings,
             commands::save_http_api_settings,
             // Token 统计命令
+            commands::get_token_stats_minute,
             commands::get_token_stats_hourly,
             commands::get_token_stats_daily,
             commands::get_token_stats_weekly,
             commands::get_token_stats_by_account,
             commands::get_token_stats_summary,
             commands::get_token_stats_by_model,
+            commands::get_token_stats_model_trend_minute,
             commands::get_token_stats_model_trend_hourly,
             commands::get_token_stats_model_trend_daily,
+            commands::get_token_stats_account_trend_minute,
             commands::get_token_stats_account_trend_hourly,
             commands::get_token_stats_account_trend_daily,
             proxy::cli_sync::get_cli_sync_status,
@@ -717,12 +778,24 @@ pub fn run() {
             proxy::cli_sync::execute_cli_restore,
             proxy::cli_sync::get_cli_config_content,
             proxy::opencode_sync::get_opencode_sync_status,
+            proxy::opencode_sync::get_opencode_providers,
             proxy::opencode_sync::get_canonical_families,
             proxy::opencode_sync::execute_opencode_sync,
             proxy::opencode_sync::execute_opencode_openai_sync,
+            proxy::opencode_sync::execute_opencode_remove_provider,
             proxy::opencode_sync::execute_opencode_restore,
             proxy::opencode_sync::get_opencode_config_content,
             proxy::opencode_sync::execute_opencode_clear,
+            proxy::hermes_sync::get_hermes_sync_status,
+            proxy::hermes_sync::execute_hermes_sync,
+            proxy::hermes_sync::execute_hermes_restore,
+            proxy::hermes_sync::execute_hermes_clear,
+            proxy::hermes_sync::get_hermes_config_content,
+            proxy::openclaw_sync::get_openclaw_sync_status,
+            proxy::openclaw_sync::execute_openclaw_sync,
+            proxy::openclaw_sync::execute_openclaw_restore,
+            proxy::openclaw_sync::execute_openclaw_clear,
+            proxy::openclaw_sync::get_openclaw_config_content,
             proxy::droid_sync::get_droid_sync_status,
             proxy::droid_sync::execute_droid_sync,
             proxy::droid_sync::execute_droid_restore,
@@ -764,14 +837,40 @@ pub fn run() {
             commands::user_token::renew_user_token,
             commands::user_token::get_token_ip_bindings,
             commands::user_token::get_user_token_summary,
+            commands::user_token::get_user_token_stats,
+            commands::user_token::get_user_tokens_ranking,
             commands::query_transit_info,
             // Patch commands
             commands::patch_agy_binary,
+            commands::list_claude_installations,
+            commands::check_claude_cowork_patch,
+            commands::apply_claude_cowork_patch,
+            commands::revert_claude_cowork_patch,
+            commands::is_claude_desktop_running,
+            commands::close_claude_desktop,
+            commands::launch_claude_desktop,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|app_handle, event| {
             match event {
+                tauri::RunEvent::Ready => {
+                    if modules::startup_quiet::take_lightweight_on_ready() {
+                        info!("Entering lightweight mode for quiet login launch");
+                        let _ = modules::lightweight::enter_lightweight_mode_without_saving(app_handle);
+                    }
+                }
+                // Prevent app from exiting when window is destroyed in lightweight mode
+                tauri::RunEvent::ExitRequested { api, .. } => {
+                    let tray_enabled = app_handle
+                        .try_state::<AppRuntimeFlags>()
+                        .map(|flags| flags.tray_enabled)
+                        .unwrap_or(true);
+
+                    if tray_enabled {
+                        api.prevent_exit();
+                    }
+                }
                 // Handle app exit - cleanup background tasks and release ports
                 tauri::RunEvent::Exit => {
                     tracing::info!("Application exiting, cleaning up background tasks and releasing ports...");
@@ -809,14 +908,7 @@ pub fn run() {
                 // Handle macOS dock icon click to reopen window
                 #[cfg(target_os = "macos")]
                 tauri::RunEvent::Reopen { .. } => {
-                    if let Some(window) = app_handle.get_webview_window("main") {
-                        let _ = window.show();
-                        let _ = window.unminimize();
-                        let _ = window.set_focus();
-                        app_handle
-                            .set_activation_policy(tauri::ActivationPolicy::Regular)
-                            .unwrap_or(());
-                    }
+                    let _ = modules::lightweight::exit_lightweight_mode(app_handle);
                 }
                 _ => {}
             }

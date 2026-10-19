@@ -214,30 +214,23 @@ pub fn get_default_user_agent() -> String {
 /// Global Session ID (generated once per app launch)
 pub static SESSION_ID: LazyLock<String> = LazyLock::new(|| uuid::Uuid::new_v4().to_string());
 
-/// Returns the best version choice between local and remote
-/// Version selection: max(local installation, remote latest, known stable 4.3.0)
-/// This prevents model rejection due to outdated client version headers.
-pub static USER_AGENT: LazyLock<String> = LazyLock::new(|| {
-    let (config, source) = resolve_version_config();
+/// Antigravity 官方语言服务枢纽 (Antigravity Hub) 版本号
+/// 对应官方出站 User-Agent: antigravity/hub/{OFFICIAL_HUB_VERSION}
+pub const OFFICIAL_HUB_VERSION: &str = "2.23.1";
 
-    tracing::info!(
-        version = %config.version,
-        source = ?source,
-        "User-Agent initialized"
-    );
+/// Antigravity 官方内部代码仓库 (Google Piper Monorepo) 变更集编号 (Changelist Number / CL)
+/// 官方每一个正式版本发布均对应确定的构建提交点，全球正版客户端保持统一，切勿随机变动
+pub const OFFICIAL_HUB_CL: &str = "998881661";
 
-    let platform_info = match std::env::consts::OS {
-        "macos" => "Macintosh; Intel Mac OS X 10_15_7",
-        "windows" => "Windows NT 10.0; Win64; x64",
-        "linux" => "X11; Linux x86_64",
-        _ => "X11; Linux x86_64",
-    };
+/// Returns the official Antigravity Hub User-Agent matching the upstream egress signature:
+/// format: "antigravity/hub/{OFFICIAL_HUB_VERSION} (aidev_client; os_type={os}; arch={arch}; cl={OFFICIAL_HUB_CL})"
+/// e.g.: "antigravity/hub/2.23.1 (aidev_client; os_type=darwin; arch=arm64; cl=998881661)"
+pub fn build_official_upstream_user_agent() -> String {
+    crate::modules::hub_version::get_current_hub_user_agent()
+}
 
-    format!(
-        "Antigravity/{} ({}) Chrome/{} Electron/{}",
-        config.version, platform_info, config.chrome, config.electron
-    )
-});
+/// Official Antigravity upstream User-Agent
+pub static USER_AGENT: LazyLock<String> = LazyLock::new(build_official_upstream_user_agent);
 
 /// Sanitizes a custom User-Agent string for upstream egress requests.
 ///
@@ -255,6 +248,10 @@ pub fn sanitize_egress_user_agent(custom_ua: &str) -> String {
     let trimmed = custom_ua.trim();
     if trimmed.is_empty() {
         return USER_AGENT.clone();
+    }
+
+    if trimmed.starts_with("antigravity/hub/") {
+        return trimmed.to_string();
     }
 
     if !trimmed.to_ascii_lowercase().contains("antigravity") {

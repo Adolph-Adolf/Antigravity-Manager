@@ -32,12 +32,13 @@ fn create_test_token(
 ) -> ProxyToken {
     let mut model_quotas = HashMap::new();
     // 模拟配额：所有支持的模型都给予相同的剩余配额
-    for m in supported_models {
+    for m in &supported_models {
         model_quotas.insert(m.to_string(), remaining_quota.unwrap_or(100));
     }
 
     ProxyToken {
         account_id: email.to_string(),
+        priority: crate::models::account::default_priority(),
         access_token: "test_token".to_string(),
         refresh_token: "test_refresh".to_string(),
         expires_in: 3600,
@@ -50,11 +51,14 @@ fn create_test_token(
         protected_models: HashSet::new(),
         health_score,
         reset_time,
+        weekly_reset_time: None,
         validation_blocked: false,
         validation_blocked_until: 0,
         validation_url: None,
         model_quotas,
         model_limits: std::collections::HashMap::new(),
+        available_models: supported_models.iter().map(|s| s.to_lowercase()).collect(),
+        model_metadata: std::collections::HashMap::new(),
     }
 }
 
@@ -93,18 +97,9 @@ fn test_is_ultra_required_model() {
 
 /// 模拟 token_manager.rs 中的排序逻辑 (更新后：始终 Tier 优先)
 fn compare_tokens_for_model(a: &ProxyToken, b: &ProxyToken, _target_model: &str) -> Ordering {
-    let tier_priority = |tier: &Option<String>| {
-        let t = tier.as_deref().unwrap_or("").to_lowercase();
-        if t.contains("ultra") {
-            0
-        } else if t.contains("pro") {
-            1
-        } else if t.contains("free") {
-            2
-        } else {
-            3
-        }
-    };
+    // 复用生产实现，保证测试验证的就是真实排序规则
+    let tier_priority =
+        |tier: &Option<String>| crate::models::quota::tier_priority(tier.as_deref());
 
     // Priority 0: 始终优先订阅等级 (Ultra > Pro > Free)
     let tier_cmp = tier_priority(&a.subscription_tier).cmp(&tier_priority(&b.subscription_tier));

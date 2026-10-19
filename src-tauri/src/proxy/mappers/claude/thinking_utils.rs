@@ -2,7 +2,7 @@ use super::models::{ContentBlock, Message, MessageContent};
 use crate::proxy::SignatureCache;
 use tracing::{debug, info, warn};
 
-pub const MIN_SIGNATURE_LENGTH: usize = 50;
+pub const MIN_SIGNATURE_LENGTH: usize = 32;
 pub const SENTINEL_SIGNATURE: &str = crate::proxy::thinking_store::SENTINEL_SIGNATURE;
 
 #[derive(Debug, Default)]
@@ -211,9 +211,9 @@ pub fn filter_invalid_thinking_blocks_with_family(
                         // If origin is not in cache (e.g. server restart or fresh session), TRUST valid signatures!
                         // Upstream Google Gemini validates its own signatures. Stripping valid signatures leads to 400 Bad Request.
                         if let Some(target) = target_family {
+                            let target_lc = target.to_lowercase();
                             if let Some(origin_family) = get_signature_family(s) {
                                 let origin_lc = origin_family.to_lowercase();
-                                let target_lc = target.to_lowercase();
                                 let is_incompatible = (target_lc == "gemini"
                                     && (origin_lc.starts_with("claude-3-opus")
                                         || origin_lc.contains("anthropic-native")))
@@ -227,6 +227,15 @@ pub fn filter_invalid_thinking_blocks_with_family(
                                     *signature = None;
                                     stripped_count += 1;
                                 }
+                            } else if target_lc.contains("gemini")
+                                && !crate::proxy::thinking_store::is_likely_gemini_signature(s)
+                            {
+                                warn!(
+                                    "[Thinking-Sanitizer] Dropping unknown non-Gemini signature (len: {}) for target '{}'",
+                                    s.len(), target
+                                );
+                                *signature = None;
+                                stripped_count += 1;
                             }
                         }
                     }

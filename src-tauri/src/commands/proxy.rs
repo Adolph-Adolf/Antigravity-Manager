@@ -5,7 +5,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tauri::State;
 use tokio::sync::RwLock;
-use tokio::time::Duration;
 
 /// 反代服务状态
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -71,13 +70,26 @@ pub async fn start_proxy_service(
     cf_state: State<'_, crate::commands::cloudflared::CloudflaredState>,
     app_handle: tauri::AppHandle,
 ) -> Result<ProxyStatus, String> {
-    internal_start_proxy_service(
+    let result = internal_start_proxy_service(
         config,
         &state,
         crate::modules::integration::SystemManager::Desktop(app_handle),
         Arc::new(cf_state.inner().clone()),
     )
-    .await
+    .await?;
+
+    // [FIX desktop] 对齐 Web/Docker admin_start_proxy_service (#1166):
+    // 持久化 auto_start = true，确保重启后自动拉起反代服务
+    if let Ok(mut app_config) = crate::modules::config::load_app_config() {
+        app_config.proxy.auto_start = true;
+        if let Err(e) = crate::modules::config::save_app_config(&app_config) {
+            tracing::warn!("[Desktop] Failed to persist auto_start=true: {}", e);
+        } else {
+            tracing::info!("[Desktop] Persisted auto_start=true to gui_config.json");
+        }
+    }
+
+    Ok(result)
 }
 
 struct StartingGuard(Arc<AtomicBool>);
@@ -129,6 +141,7 @@ pub async fn internal_start_proxy_service(
         // Sync enabled state from config
         if let Some(monitor) = monitor_lock.as_ref() {
             monitor.set_enabled(config.enable_logging);
+            monitor.set_capture_health_logs(config.capture_health_logs);
         }
     }
 
@@ -179,17 +192,13 @@ pub async fn internal_start_proxy_service(
     let active_accounts = token_manager.load_accounts().await.unwrap_or(0);
 
     if active_accounts == 0 {
-        let zai_enabled = config.zai.enabled
-            && !matches!(config.zai.dispatch_mode, crate::proxy::ZaiDispatchMode::Off);
-        if !zai_enabled {
-            tracing::warn!("沒有可用賬號，反代邏輯將暫停，請通過管理界面添加。");
-            return Ok(ProxyStatus {
-                running: false,
-                port: config.port,
-                base_url: format!("http://127.0.0.1:{}", config.port),
-                active_accounts: 0,
-            });
-        }
+        tracing::warn!("沒有可用賬號，反代邏輯將暫停，請通過管理界面添加。");
+        return Ok(ProxyStatus {
+            running: false,
+            port: config.port,
+            base_url: format!("http://127.0.0.1:{}", config.port),
+            active_accounts: 0,
+        });
     }
 
     let mut instance_lock = state.instance.write().await;
@@ -240,10 +249,8 @@ pub async fn ensure_admin_server(
         config.experimental.log_retention_days,
         config.experimental.thinking_store_enabled,
         config.experimental.thinking_retention_days,
-    );
-    crate::proxy::config::update_global_compression_level(
-        config.experimental.compression_level.clone(),
-        config.experimental.enable_usage_scaling,
+        Some(config.experimental.thinking_max_memory_turns),
+        Some(config.experimental.enable_global_compaction_strip),
     );
 
     // Ensure monitor exists
@@ -276,7 +283,6 @@ pub async fn ensure_admin_server(
         config.upstream_proxy.clone(),
         config.user_agent_override.clone(),
         crate::proxy::ProxySecurityConfig::from_proxy_config(&config),
-        config.zai.clone(),
         monitor,
         config.experimental.clone(),
         config.debug_logging.clone(),
@@ -304,16 +310,15 @@ pub async fn ensure_admin_server(
     crate::proxy::update_global_system_prompt_config(config.global_system_prompt.clone());
     // [NEW] 初始化全局图像思维模式配置
     crate::proxy::update_image_thinking_mode(config.image_thinking_mode.clone());
-    // [NEW] 初始化全局压缩等级配置
-    crate::proxy::config::update_global_compression_level(
-        config.experimental.compression_level.clone(),
-        config.experimental.enable_usage_scaling,
-    );
+    crate::proxy::update_multimodal_config(config.multimodal.clone());
+    crate::proxy::update_stream_timeout_config(config.stream_timeouts.clone());
     crate::proxy::config::update_global_audit_config(
         config.experimental.payload_storage_mode.clone(),
         config.experimental.log_retention_days,
         config.experimental.thinking_store_enabled,
         config.experimental.thinking_retention_days,
+        Some(config.experimental.thinking_max_memory_turns),
+        Some(config.experimental.enable_global_compaction_strip),
     );
 
     Ok(())
@@ -333,6 +338,17 @@ pub async fn stop_proxy_service(state: State<'_, ProxyServiceState>) -> Result<(
         instance.token_manager.abort_background_tasks().await;
         instance.axum_server.set_running(false).await;
         // 已移除 instance.axum_server.stop() 调用，防止杀死 Admin Server
+    }
+
+    // [FIX desktop] 对齐 Web/Docker admin_stop_proxy_service (#1166):
+    // 持久化 auto_start = false，确保重启后不会自动拉起反代服务
+    if let Ok(mut app_config) = crate::modules::config::load_app_config() {
+        app_config.proxy.auto_start = false;
+        if let Err(e) = crate::modules::config::save_app_config(&app_config) {
+            tracing::warn!("[Desktop] Failed to persist auto_start=false: {}", e);
+        } else {
+            tracing::info!("[Desktop] Persisted auto_start=false to gui_config.json");
+        }
     }
 
     Ok(())
@@ -419,6 +435,19 @@ pub async fn set_proxy_monitor_enabled(
     Ok(())
 }
 
+/// 设置捕获健康检查日志状态
+#[tauri::command]
+pub async fn set_proxy_capture_health_logs(
+    state: State<'_, ProxyServiceState>,
+    enabled: bool,
+) -> Result<(), String> {
+    let monitor_lock = state.monitor.read().await;
+    if let Some(monitor) = monitor_lock.as_ref() {
+        monitor.set_capture_health_logs(enabled);
+    }
+    Ok(())
+}
+
 /// 清除反代请求日志
 #[tauri::command]
 pub async fn clear_proxy_logs(state: State<'_, ProxyServiceState>) -> Result<(), String> {
@@ -437,6 +466,27 @@ pub async fn clear_proxy_logs(state: State<'_, ProxyServiceState>) -> Result<(),
     Ok(())
 }
 
+/// 清空所有思考块缓存与持久化数据 (包含 RAM 内存滑动窗口与 SQLite 数据库，但不删除任何请求日志)
+#[tauri::command]
+pub async fn clear_thinking_store() -> Result<usize, String> {
+    // 1. 清空内存中 ThinkingStore 实例与 SignatureCache
+    crate::proxy::thinking_store::ThinkingStore::global().clear();
+    crate::proxy::SignatureCache::global().clear();
+
+    // 2. 清空 SQLite 数据库中所有的 thinking_records 与 thinking_sessions
+    tokio::task::spawn_blocking(crate::modules::proxy_db::clear_all_thinking_data)
+        .await
+        .map_err(|e| format!("Spawn blocking failed: {}", e))?
+}
+
+/// 获取当前思考块存储的记录总数
+#[tauri::command]
+pub async fn get_thinking_store_count() -> Result<usize, String> {
+    tokio::task::spawn_blocking(crate::modules::proxy_db::get_thinking_records_count)
+        .await
+        .map_err(|e| format!("Spawn blocking failed: {}", e))?
+}
+
 /// 获取反代请求日志 (分页)
 #[tauri::command]
 pub async fn get_proxy_logs_paginated(
@@ -450,7 +500,7 @@ pub async fn get_proxy_logs_paginated(
 #[tauri::command]
 pub async fn get_proxy_log_detail(
     log_id: Option<String>,
-    logId: Option<String>,
+    #[allow(non_snake_case)] logId: Option<String>,
 ) -> Result<ProxyRequestLog, String> {
     let id = log_id
         .or(logId)
@@ -625,71 +675,6 @@ fn extract_model_ids(value: &serde_json::Value) -> Vec<String> {
     out
 }
 
-/// Fetch available models from the configured z.ai Anthropic-compatible API (`/v1/models`).
-#[tauri::command]
-pub async fn fetch_zai_models(
-    zai: crate::proxy::ZaiConfig,
-    upstream_proxy: crate::proxy::config::UpstreamProxyConfig,
-    request_timeout: u64,
-) -> Result<Vec<String>, String> {
-    if zai.base_url.trim().is_empty() {
-        return Err("z.ai base_url is empty".to_string());
-    }
-    if zai.api_key.trim().is_empty() {
-        return Err("z.ai api_key is not set".to_string());
-    }
-
-    let url = join_base_url(&zai.base_url, "/v1/models");
-
-    let mut builder =
-        reqwest::Client::builder().timeout(Duration::from_secs(request_timeout.max(5)));
-    if upstream_proxy.enabled && !upstream_proxy.url.is_empty() {
-        let proxy = reqwest::Proxy::all(&upstream_proxy.url)
-            .map_err(|e| format!("Invalid upstream proxy url: {}", e))?;
-        builder = builder.proxy(proxy);
-    }
-    let client = builder
-        .build()
-        .map_err(|e| format!("Failed to build HTTP client: {}", e))?;
-
-    let resp = client
-        .get(&url)
-        .header("Authorization", format!("Bearer {}", zai.api_key))
-        .header("x-api-key", zai.api_key)
-        .header("anthropic-version", "2023-06-01")
-        .header("accept", "application/json")
-        .send()
-        .await
-        .map_err(|e| format!("Upstream request failed: {}", e))?;
-
-    let status = resp.status();
-    let text = resp
-        .text()
-        .await
-        .map_err(|e| format!("Failed to read response: {}", e))?;
-
-    if !status.is_success() {
-        let preview = if text.len() > 4000 {
-            let mut end = 4000;
-            while end > 0 && !text.is_char_boundary(end) {
-                end -= 1;
-            }
-            &text[..end]
-        } else {
-            &text
-        };
-        return Err(format!("Upstream returned {}: {}", status, preview));
-    }
-
-    let json: serde_json::Value =
-        serde_json::from_str(&text).map_err(|e| format!("Invalid JSON response: {}", e))?;
-    let mut models = extract_model_ids(&json);
-    models.retain(|s| !s.trim().is_empty());
-    models.sort();
-    models.dedup();
-    Ok(models)
-}
-
 /// 获取当前调度配置
 #[tauri::command]
 pub async fn get_proxy_scheduling_config(
@@ -853,4 +838,135 @@ pub async fn get_proxy_pool_config(
 #[tauri::command]
 pub async fn get_proxy_db_disk_size() -> Result<u64, String> {
     crate::modules::proxy_db::get_proxy_db_disk_bytes()
+}
+
+/// 测试模型连通性与预热检测
+#[tauri::command]
+pub async fn test_model_connectivity(
+    state: State<'_, ProxyServiceState>,
+    model: String,
+    target_account_id: Option<String>,
+) -> Result<crate::proxy::handlers::warmup::WarmupResponse, String> {
+    let port = {
+        let instance_guard = state.instance.read().await;
+        if let Some(ref inst) = *instance_guard {
+            inst.config.port
+        } else {
+            return Err("反代服务未运行，请先在代理页面启动反代服务".to_string());
+        }
+    };
+
+    let accounts = crate::modules::account::list_accounts().unwrap_or_default();
+
+    let (chosen_account, token, pid) = if let Some(ref acc_id) = target_account_id {
+        if !acc_id.is_empty() {
+            let acc = accounts
+                .iter()
+                .find(|a| &a.id == acc_id)
+                .cloned()
+                .ok_or_else(|| "未找到指定的账号".to_string())?;
+            let (t, p) = crate::modules::quota::get_valid_token_for_warmup(&acc).await?;
+            (acc, t, p)
+        } else {
+            pick_auto_test_account(&accounts).await?
+        }
+    } else {
+        pick_auto_test_account(&accounts).await?
+    };
+
+    let warmup_url = format!("http://127.0.0.1:{}/internal/warmup", port);
+    let body = serde_json::json!({
+        "email": chosen_account.email,
+        "model": model,
+        "access_token": token,
+        "project_id": pid,
+        "account_id": chosen_account.id
+    });
+
+    let client = rquest::Client::builder()
+        .timeout(std::time::Duration::from_secs(60))
+        .no_proxy()
+        .build()
+        .map_err(|e| format!("创建客户端失败: {}", e))?;
+
+    let resp = client
+        .post(&warmup_url)
+        .header("Content-Type", "application/json")
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("发送预热检测请求失败: {}", e))?;
+
+    let result = resp
+        .json::<crate::proxy::handlers::warmup::WarmupResponse>()
+        .await
+        .map_err(|e| format!("解析预热检测结果失败: {}", e))?;
+
+    Ok(result)
+}
+
+async fn pick_auto_test_account(
+    accounts: &[crate::models::account::Account],
+) -> Result<(crate::models::account::Account, String, String), String> {
+    let candidates: Vec<_> = accounts
+        .iter()
+        .filter(|a| !a.disabled && !a.proxy_disabled)
+        .cloned()
+        .collect();
+
+    if candidates.is_empty() {
+        return Err(
+            "当前没有开启反代的可用账号，请先在账号页面开启至少一个账号的反代，或指定具体账号测试"
+                .to_string(),
+        );
+    }
+
+    // 优先选择配额充足且健康的账号 (按各模型中最高剩余配额从大到小排序)
+    let mut sorted_candidates = candidates;
+    sorted_candidates.sort_by(|a, b| {
+        let quota_a = a
+            .quota
+            .as_ref()
+            .and_then(|q| q.models.iter().map(|m| m.percentage).max())
+            .unwrap_or(0);
+        let quota_b = b
+            .quota
+            .as_ref()
+            .and_then(|q| q.models.iter().map(|m| m.percentage).max())
+            .unwrap_or(0);
+        quota_b.cmp(&quota_a)
+    });
+
+    let mut last_err = None;
+    for acc in sorted_candidates {
+        match crate::modules::quota::get_valid_token_for_warmup(&acc).await {
+            Ok((t, p)) => return Ok((acc, t, p)),
+            Err(e) => {
+                last_err = Some(e);
+            }
+        }
+    }
+
+    Err(last_err.unwrap_or_else(|| "无法获取候选账号的有效凭证".to_string()))
+}
+
+/// 获取当前生效的官方 Hub 指纹信息
+#[tauri::command]
+pub async fn get_hub_fingerprint() -> Result<crate::modules::hub_version::HubFingerprint, String> {
+    Ok(crate::modules::hub_version::get_current_hub_fingerprint())
+}
+
+/// 强制探测官方远程更新源并返回最新 Hub 指纹信息
+#[tauri::command]
+pub async fn detect_remote_hub_fingerprint(
+    custom_version: Option<String>,
+    custom_cl: Option<String>,
+) -> Result<crate::modules::hub_version::HubFingerprint, String> {
+    let fp = crate::modules::hub_version::detect_and_update_hub_fingerprint(
+        custom_version.as_deref(),
+        custom_cl.as_deref(),
+    )
+    .await;
+
+    Ok(fp)
 }

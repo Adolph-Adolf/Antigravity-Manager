@@ -1,5 +1,6 @@
 pub mod account;
 pub mod account_service;
+pub mod auto_switch;
 pub mod cache;
 pub mod cloudflared;
 pub mod config;
@@ -7,8 +8,10 @@ pub mod db;
 pub mod device;
 #[allow(dead_code)]
 pub mod http_api;
+pub mod hub_version;
 pub mod i18n;
 pub mod integration;
+pub mod lightweight;
 pub mod log_bridge;
 pub mod logger;
 pub mod migration;
@@ -19,6 +22,7 @@ pub mod proxy_db;
 pub mod quota;
 pub mod scheduler;
 pub mod security_db;
+pub mod startup_quiet;
 pub mod token_stats;
 pub mod tray;
 pub mod update_checker;

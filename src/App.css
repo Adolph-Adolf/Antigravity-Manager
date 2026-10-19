@@ -33,7 +33,7 @@ html {
 }
 
 html.dark {
-  background-color: #0f172a;
+  background-color: #09090b;
 }
 
 /* 全局样式 */
@@ -46,6 +46,17 @@ body {
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
   background-color: #FAFBFC;
+}
+
+/* LobeHub UI flex center fallback for @lobehub/icons avatar components */
+.lobe-flex {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  line-height: 0 !important;
+}
+.lobe-flex svg {
+  display: block;
 }
 
 /* Dark mode override for body strictly */
@@ -97,6 +108,7 @@ a {
 /* 日志报文虚拟滚动条 - 高性能高对比度响应式滚动条 */
 .payload-viewer-scroll {
   scroll-behavior: auto !important;
+  overflow-anchor: none;
   scrollbar-width: thin;
   scrollbar-color: rgba(156, 163, 175, 0.5) transparent;
 }

@@ -53,6 +53,19 @@ async fn auth_middleware_internal(
         return Ok(next.run(request).await);
     }
 
+    // 内部端点 (/internal/*) 保护：仅供本机内部进程调度（如配额轮询内部预热）。
+    // 1. 本机直接 TCP 回环：免鉴权直接放行。
+    // 2. 任何非回环来源：无论鉴权模式（即使 auth_mode=Off）或是否提供有效 API Key，一律直接拒绝 (403 Forbidden)。
+    if is_internal_endpoint {
+        if crate::proxy::middleware::ip_filter::is_direct_loopback(&request) {
+            tracing::debug!("Loopback internal endpoint bypassed auth: {}", path);
+            return Ok(next.run(request).await);
+        } else {
+            tracing::warn!("Blocked non-loopback access to internal endpoint: {}", path);
+            return Err(StatusCode::FORBIDDEN);
+        }
+    }
+
     let security = security.read().await.clone();
     let effective_mode = security.effective_auth_mode();
 
@@ -96,12 +109,6 @@ async fn auth_middleware_internal(
         }
 
         if matches!(effective_mode, ProxyAuthMode::AllExceptHealth) && is_health_check {
-            return Ok(next.run(request).await);
-        }
-
-        // 内部端点 (/internal/*) 豁免鉴权 - 用于 warmup 等内部功能
-        if is_internal_endpoint {
-            tracing::debug!("Internal endpoint bypassed auth: {}", path);
             return Ok(next.run(request).await);
         }
     } else {
@@ -163,19 +170,8 @@ async fn auth_middleware_internal(
         // 尝试验证 UserToken
         let token = api_key.unwrap();
 
-        // 提取 IP (复用逻辑)
-        let client_ip = request
-            .headers()
-            .get("x-forwarded-for")
-            .and_then(|v| v.to_str().ok())
-            .map(|s| s.split(',').next().unwrap_or(s).trim().to_string())
-            .or_else(|| {
-                request
-                    .headers()
-                    .get("x-real-ip")
-                    .and_then(|v| v.to_str().ok())
-                    .map(|s| s.to_string())
-            })
+        // 提取 IP (复用 ip_filter 规范化逻辑，支持 IPv4/IPv6 及 ConnectInfo)
+        let client_ip = crate::proxy::middleware::ip_filter::extract_client_ip(&request)
             .unwrap_or_else(|| "127.0.0.1".to_string()); // Default fallback
 
         // 验证 Token
@@ -253,7 +249,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_admin_auth_with_password() {
-        let security = Arc::new(RwLock::new(ProxySecurityConfig {
+        let _security = Arc::new(RwLock::new(ProxySecurityConfig {
             auth_mode: ProxyAuthMode::Strict,
             api_key: "sk-api".to_string(),
             admin_password: Some("admin123".to_string()),
@@ -263,7 +259,7 @@ mod tests {
         }));
 
         // 模拟请求 - 管理接口使用正确的管理密码
-        let req = Request::builder()
+        let _req = Request::builder()
             .header("Authorization", "Bearer admin123")
             .uri("/admin/stats")
             .body(axum::body::Body::empty())
@@ -276,5 +272,87 @@ mod tests {
     #[test]
     fn test_auth_placeholder() {
         assert!(true);
+    }
+
+    #[tokio::test]
+    async fn test_internal_endpoint_loopback_only() {
+        use axum::routing::post;
+        use tower::ServiceExt;
+
+        let security = Arc::new(RwLock::new(ProxySecurityConfig {
+            auth_mode: ProxyAuthMode::Off, // 即使在 Off 模式下，也必须强制拦截非回环
+            api_key: "valid-key".to_string(),
+            admin_password: None,
+            allow_lan_access: true,
+            port: 8045,
+            security_monitor: crate::proxy::config::SecurityMonitorConfig::default(),
+        }));
+
+        let app = axum::Router::new()
+            .route("/internal/warmup", post(|| async { StatusCode::OK }))
+            .layer(axum::middleware::from_fn_with_state(
+                security.clone(),
+                auth_middleware,
+            ));
+
+        // 1. 本机回环来源（带 ConnectInfo） -> 允许访问 (200 OK)
+        let mut req_loopback = Request::builder()
+            .method("POST")
+            .uri("/internal/warmup")
+            .body(axum::body::Body::empty())
+            .unwrap();
+        req_loopback
+            .extensions_mut()
+            .insert(axum::extract::ConnectInfo(
+                "127.0.0.1:12345".parse::<std::net::SocketAddr>().unwrap(),
+            ));
+        let resp = app.clone().oneshot(req_loopback).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        // 2. 外部局域网来源（无凭证，即使 auth_mode=Off） -> 必须被拦截 (403 Forbidden)
+        let mut req_lan = Request::builder()
+            .method("POST")
+            .uri("/internal/warmup")
+            .body(axum::body::Body::empty())
+            .unwrap();
+        req_lan.extensions_mut().insert(axum::extract::ConnectInfo(
+            "192.168.1.100:12345"
+                .parse::<std::net::SocketAddr>()
+                .unwrap(),
+        ));
+        let resp = app.clone().oneshot(req_lan).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+
+        // 3. 外部来源附带有效 API Key -> 依然必须被拦截 (403 Forbidden)
+        let mut req_with_key = Request::builder()
+            .method("POST")
+            .uri("/internal/warmup")
+            .header("Authorization", "Bearer valid-key")
+            .body(axum::body::Body::empty())
+            .unwrap();
+        req_with_key
+            .extensions_mut()
+            .insert(axum::extract::ConnectInfo(
+                "10.0.0.1:12345".parse::<std::net::SocketAddr>().unwrap(),
+            ));
+        let resp = app.clone().oneshot(req_with_key).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+
+        // 4. 外部来源伪造 X-Forwarded-For: 127.0.0.1 -> 依然被拦截 (403 Forbidden)
+        let mut req_spoofed = Request::builder()
+            .method("POST")
+            .uri("/internal/warmup")
+            .header("x-forwarded-for", "127.0.0.1")
+            .body(axum::body::Body::empty())
+            .unwrap();
+        req_spoofed
+            .extensions_mut()
+            .insert(axum::extract::ConnectInfo(
+                "192.168.1.100:12345"
+                    .parse::<std::net::SocketAddr>()
+                    .unwrap(),
+            ));
+        let resp = app.clone().oneshot(req_spoofed).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
     }
 }

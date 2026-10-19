@@ -13,7 +13,7 @@ interface AccountRowProps {
     isCurrent: boolean;
     isRefreshing: boolean;
     isSwitching?: boolean;
-    onSwitch: () => void;
+    onSwitch: (targetIde?: string) => void;
     onRefresh: () => void;
     onViewDevice: () => void;
     onViewDetails: () => void;
@@ -113,7 +113,7 @@ function AccountRow({ account, selected, onSelect, isCurrent, isRefreshing, isSw
                             </span>
                         )}
 
-                        {account.proxy_disabled && (
+                        {account.proxy_disabled && !isDisabled && (
                             <span
                                 className="px-2 py-0.5 rounded-md bg-orange-100 dark:bg-orange-900/50 text-orange-700 dark:text-orange-300 text-[10px] font-bold flex items-center gap-1 shadow-sm border border-orange-200/50"
                                 title={account.proxy_disabled_reason || t('accounts.proxy_disabled_tooltip')}
@@ -337,7 +337,7 @@ function AccountRow({ account, selected, onSelect, isCurrent, isRefreshing, isSw
                     </button>
                     <button
                         className={`p-1.5 text-gray-500 dark:text-gray-400 rounded-lg transition-all ${(isSwitching || isDisabled) ? 'bg-blue-50 dark:bg-blue-900/10 text-blue-600 dark:text-blue-400 cursor-not-allowed' : 'hover:text-blue-600 dark:hover:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/30'}`}
-                        onClick={(e) => { e.stopPropagation(); onSwitch(); }}
+                        onClick={(e) => { e.stopPropagation(); onSwitch('classic'); }}
                         title={isDisabled ? t('accounts.disabled_tooltip') : (isSwitching ? t('common.loading') : t('accounts.switch_to'))}
                         disabled={isSwitching || isDisabled}
                     >

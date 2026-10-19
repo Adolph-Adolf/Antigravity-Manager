@@ -14,11 +14,29 @@ static TOOL_SIGNATURE_DB: OnceLock<Mutex<Option<(PathBuf, Connection)>>> = OnceL
 const THOUGHT_RAW_MAGIC: &[u8] = b"RAW1";
 const THOUGHT_GZIP_MAGIC: &[u8] = b"AGZ1";
 const MIN_GZIP_THOUGHT: usize = 384;
-const SENTINEL_SIGNATURE: &str = "skip_thought_signature_validator";
-const MIN_REAL_SIGNATURE: usize = 50;
+pub const SENTINEL_SIGNATURE: &str = "skip_thought_signature_validator";
+pub const MIN_REAL_SIGNATURE: usize = 32;
 
-fn persist_signature(signature: Option<&str>) -> Option<&str> {
-    signature.filter(|s| s.len() >= MIN_REAL_SIGNATURE && *s != SENTINEL_SIGNATURE)
+pub fn normalize_and_heal_signature(sig: &str) -> Option<String> {
+    if sig.is_empty() || sig == SENTINEL_SIGNATURE {
+        return None;
+    }
+    // 自愈防裂化：若签名被误传或脏存储为原始 Protobuf 二进制 (首字节 0x12)，自动纠正编码为标准 Base64
+    let normalized = if sig.as_bytes().first() == Some(&0x12) {
+        use base64::Engine;
+        base64::engine::general_purpose::STANDARD.encode(sig.as_bytes())
+    } else {
+        sig.to_string()
+    };
+    if normalized.len() >= MIN_REAL_SIGNATURE {
+        Some(normalized)
+    } else {
+        None
+    }
+}
+
+fn persist_signature(signature: Option<&str>) -> Option<String> {
+    signature.and_then(normalize_and_heal_signature)
 }
 
 /// Tool turns match by tool_id at fill time — visible/tool_names are in the request JSON.
@@ -95,6 +113,10 @@ fn connect_db() -> Result<Connection, String> {
     Ok(conn)
 }
 
+pub fn is_synthetic_tool_id(id: &str) -> bool {
+    id.starts_with("call_") && id.chars().filter(|&c| c == '_').count() >= 3
+}
+
 fn init_thinking_schema(conn: &Connection) -> Result<(), String> {
     conn.execute(
         "CREATE TABLE IF NOT EXISTS thinking_records (
@@ -112,22 +134,53 @@ fn init_thinking_schema(conn: &Connection) -> Result<(), String> {
         [],
     )
     .map_err(|e| e.to_string())?;
+
+    // 动态升级：增加 primary_tool_id 列用于旧版兼容点查
     let _ = conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_thinking_rec_session ON thinking_records (session_key, created_at ASC)",
+        "ALTER TABLE thinking_records ADD COLUMN primary_tool_id TEXT",
         [],
     );
+
+    // 动态升级：增加 causal_tool_id 列用于确定性因果伪哈希 ID 极速穿透点查
+    let _ = conn.execute(
+        "ALTER TABLE thinking_records ADD COLUMN causal_tool_id TEXT",
+        [],
+    );
+
+    // 1. 覆盖 load_thinking_records 的正向序列扫描 (ORDER BY id ASC)，同时完美承接逆序扫描 (ORDER BY id DESC)
+    let _ = conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_thinking_rec_seq ON thinking_records (session_key, id ASC)",
+        [],
+    );
+    // 2. 覆盖基于 causal_tool_id 的快速穿透点查 (极简 Partial Index，极致纳秒响应)
+    let _ = conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_thinking_rec_causal ON thinking_records (session_key, causal_tool_id) WHERE causal_tool_id IS NOT NULL",
+        [],
+    );
+    // 3. 覆盖基于 primary_tool_id 的快速穿透点查 (兼容旧版数据)
+    let _ = conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_thinking_rec_tool ON thinking_records (session_key, primary_tool_id) WHERE primary_tool_id IS NOT NULL",
+        [],
+    );
+    // 4. 覆盖基于 fingerprint 的指纹点查
     let _ = conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_thinking_rec_fp ON thinking_records (session_key, fingerprint)",
         [],
     );
-    let _ = conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_thinking_rec_latest ON thinking_records (session_key, id DESC)",
-        [],
-    );
+    // 5. 覆盖历史清理时间索引
     let _ = conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_thinking_rec_accessed ON thinking_records (last_accessed ASC)",
         [],
     );
+    // 6. 覆盖基于 signature 的精准穿透点查 (极简 Partial Index，WHERE signature IS NOT NULL)
+    let _ = conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_thinking_rec_sig ON thinking_records (session_key, signature) WHERE signature IS NOT NULL",
+        [],
+    );
+
+    // 7. 索引大瘦身：安全清理物理冗余的重复索引，削减写放大开销
+    let _ = conn.execute("DROP INDEX IF EXISTS idx_thinking_rec_latest", []);
+    let _ = conn.execute("DROP INDEX IF EXISTS idx_thinking_rec_session", []);
     conn.execute(
         "CREATE TABLE IF NOT EXISTS thinking_sessions (
             session_key TEXT PRIMARY KEY,
@@ -147,26 +200,47 @@ fn init_thinking_schema(conn: &Connection) -> Result<(), String> {
     Ok(())
 }
 
-fn open_thinking_db() -> Result<Connection, String> {
-    let db_path = get_thinking_db_path()?;
+fn open_thinking_db_at(db_path: &PathBuf) -> Result<Connection, String> {
     let conn = Connection::open(db_path).map_err(|e| e.to_string())?;
     apply_fast_pragmas(&conn)?;
     init_thinking_schema(&conn)?;
     Ok(conn)
 }
 
+fn open_thinking_db() -> Result<Connection, String> {
+    let db_path = get_thinking_db_path()?;
+    open_thinking_db_at(&db_path)
+}
+
+static THINKING_DB: OnceLock<Mutex<Option<(PathBuf, Connection)>>> = OnceLock::new();
+
+pub struct ThinkingDbGuard(MutexGuard<'static, Option<(PathBuf, Connection)>>);
+
+impl std::ops::Deref for ThinkingDbGuard {
+    type Target = Connection;
+    fn deref(&self) -> &Self::Target {
+        &self.0.as_ref().expect("thinking db connection").1
+    }
+}
+
+impl std::ops::DerefMut for ThinkingDbGuard {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0.as_mut().expect("thinking db connection").1
+    }
+}
+
 /// Process-lifetime connection to thinking_store.db.
 /// Fill/hydrate must not open proxy_logs.db (it can be multi-GB on HDD).
-fn thinking_db() -> Result<MutexGuard<'static, Connection>, String> {
-    static DB: OnceLock<Mutex<Connection>> = OnceLock::new();
-    if DB.get().is_none() {
-        let conn = open_thinking_db()?;
-        let _ = DB.set(Mutex::new(conn));
+/// Automatically tracks data directory changes and reuses connection with fast pragmas.
+fn thinking_db() -> Result<ThinkingDbGuard, String> {
+    let db_path = get_thinking_db_path()?;
+    let slot = THINKING_DB.get_or_init(|| Mutex::new(None));
+    let mut guard = slot.lock().map_err(|e| format!("thinking db lock: {e}"))?;
+    if guard.as_ref().map(|(p, _)| p) != Some(&db_path) {
+        let conn = open_thinking_db_at(&db_path)?;
+        *guard = Some((db_path, conn));
     }
-    DB.get()
-        .ok_or_else(|| "thinking db was not initialized".to_string())?
-        .lock()
-        .map_err(|e| format!("thinking db lock: {e}"))
+    Ok(ThinkingDbGuard(guard))
 }
 
 fn mark_thinking_imported(conn: &Connection) {
@@ -318,6 +392,10 @@ pub fn init_db() -> Result<(), String> {
         "ALTER TABLE request_logs ADD COLUMN cached_tokens INTEGER",
         [],
     );
+    let _ = conn.execute(
+        "ALTER TABLE request_logs ADD COLUMN reasoning_tokens INTEGER",
+        [],
+    );
     let _ = conn.execute("ALTER TABLE request_logs ADD COLUMN account_email TEXT", []);
     let _ = conn.execute("ALTER TABLE request_logs ADD COLUMN mapped_model TEXT", []);
     let _ = conn.execute("ALTER TABLE request_logs ADD COLUMN protocol TEXT", []);
@@ -333,6 +411,11 @@ pub fn init_db() -> Result<(), String> {
     );
     let _ = conn.execute(
         "ALTER TABLE request_logs ADD COLUMN response_headers TEXT",
+        [],
+    );
+    let _ = conn.execute("ALTER TABLE request_logs ADD COLUMN session_id TEXT", []);
+    let _ = conn.execute(
+        "ALTER TABLE request_logs ADD COLUMN upstream_model TEXT",
         [],
     );
 
@@ -376,6 +459,12 @@ pub fn init_db() -> Result<(), String> {
     // 复合索引：用户名与时间戳倒序
     let _ = conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_username_timestamp ON request_logs (username, timestamp DESC)",
+        [],
+    );
+
+    // 复合索引：会话与时间戳倒序（针对会话粒度运维分析）
+    let _ = conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_session_timestamp ON request_logs (session_id, timestamp DESC)",
         [],
     );
 
@@ -428,28 +517,86 @@ fn map_request_log_row(row: &rusqlite::Row) -> rusqlite::Result<ProxyRequestLog>
         input_tokens: row.get(11).unwrap_or(None),
         output_tokens: row.get(12).unwrap_or(None),
         cached_tokens: row.get(13).unwrap_or(None),
-        account_email: row.get(14).unwrap_or(None),
-        mapped_model: row.get(15).unwrap_or(None),
-        protocol: row.get(16).unwrap_or(None),
-        client_ip: row.get(17).unwrap_or(None),
-        username: row.get(18).unwrap_or(None),
-        request_headers: row.get(19).unwrap_or(None),
-        upstream_request_headers: row.get(20).unwrap_or(None),
-        response_headers: row.get(21).unwrap_or(None),
+        reasoning_tokens: row.get(14).unwrap_or(None),
+        account_email: row.get(15).unwrap_or(None),
+        mapped_model: row.get(16).unwrap_or(None),
+        protocol: row.get(17).unwrap_or(None),
+        client_ip: row.get(18).unwrap_or(None),
+        username: row.get(19).unwrap_or(None),
+        request_headers: row.get(20).unwrap_or(None),
+        upstream_request_headers: row.get(21).unwrap_or(None),
+        response_headers: row.get(22).unwrap_or(None),
+        session_id: row.get(23).unwrap_or(None),
+        upstream_model: row
+            .get::<_, Option<String>>("upstream_model")
+            .ok()
+            .flatten(),
     })
+}
+
+pub const MAX_TOOL_SIGNATURES_ROWS: usize = 10_000;
+pub const TOOL_SIGNATURES_TTL_DAYS: i64 = 7;
+
+/// 淘汰与修剪 tool_signatures 表（Defect 12: 限制 10,000 行上限与 7 天 TTL 淘汰）
+pub fn prune_tool_signatures(
+    conn: &Connection,
+    max_rows: usize,
+    ttl_days: i64,
+) -> Result<usize, String> {
+    let mut total_deleted = 0;
+
+    // 1. TTL 淘汰：删除超过 ttl_days (默认 7 天) 的陈旧工具签名
+    if ttl_days > 0 {
+        let cutoff = chrono::Utc::now().timestamp_millis() - (ttl_days * 24 * 3600 * 1000);
+        let deleted = conn
+            .execute(
+                "DELETE FROM tool_signatures WHERE created_at < ?1",
+                params![cutoff],
+            )
+            .map_err(|e| e.to_string())?;
+        total_deleted += deleted;
+    }
+
+    // 2. 数量上限淘汰：若总行数超出 max_rows (默认 10,000)，淘汰 created_at 最早的超额行
+    if max_rows > 0 {
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM tool_signatures", [], |r| r.get(0))
+            .map_err(|e| e.to_string())?;
+        if count > max_rows as i64 {
+            let excess = count - max_rows as i64;
+            let deleted = conn
+                .execute(
+                    "DELETE FROM tool_signatures WHERE tool_id IN (
+                        SELECT tool_id FROM tool_signatures ORDER BY created_at ASC LIMIT ?1
+                    )",
+                    params![excess],
+                )
+                .map_err(|e| e.to_string())?;
+            total_deleted += deleted;
+        }
+    }
+
+    Ok(total_deleted)
 }
 
 pub fn save_tool_signature(tool_id: &str, signature: &str) -> Result<(), String> {
     if tool_id.is_empty() || signature.is_empty() {
         return Ok(());
     }
+    let norm_id = crate::proxy::common::utils::normalize_tool_id(tool_id);
+    let healed_sig = match normalize_and_heal_signature(signature) {
+        Some(s) => s,
+        None => return Ok(()),
+    };
     let conn = connect_db()?;
     let now = chrono::Utc::now().timestamp_millis();
     conn.execute(
         "INSERT OR REPLACE INTO tool_signatures (tool_id, signature, created_at) VALUES (?1, ?2, ?3)",
-        params![tool_id, signature, now],
+        params![norm_id.as_ref(), healed_sig, now],
     )
     .map_err(|e| e.to_string())?;
+
+    let _ = prune_tool_signatures(&conn, MAX_TOOL_SIGNATURES_ROWS, TOOL_SIGNATURES_TTL_DAYS);
     Ok(())
 }
 
@@ -457,33 +604,61 @@ pub fn load_tool_signature(tool_id: &str) -> Result<Option<String>, String> {
     if tool_id.is_empty() {
         return Ok(None);
     }
+    let norm_id = crate::proxy::common::utils::normalize_tool_id(tool_id);
     let db_path = get_proxy_db_path()?;
-    let mut db = TOOL_SIGNATURE_DB
-        .get_or_init(|| Mutex::new(None))
-        .lock()
-        .map_err(|e| format!("tool signature db lock: {e}"))?;
-    if db.as_ref().map(|(path, _)| path) != Some(&db_path) {
-        let conn = Connection::open_with_flags(&db_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+    let found = {
+        let mut db = TOOL_SIGNATURE_DB
+            .get_or_init(|| Mutex::new(None))
+            .lock()
+            .map_err(|e| format!("tool signature db lock: {e}"))?;
+        if db.as_ref().map(|(path, _)| path) != Some(&db_path) {
+            let conn = Connection::open_with_flags(&db_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+                .map_err(|e| e.to_string())?;
+            conn.busy_timeout(std::time::Duration::from_secs(5))
+                .map_err(|e| e.to_string())?;
+            *db = Some((db_path, conn));
+        }
+        let conn = &db
+            .as_ref()
+            .ok_or("tool signature db was not initialized")?
+            .1;
+        let mut stmt = conn
+            .prepare_cached("SELECT signature FROM tool_signatures WHERE tool_id = ?1 LIMIT 1")
             .map_err(|e| e.to_string())?;
-        conn.busy_timeout(std::time::Duration::from_secs(5))
-            .map_err(|e| e.to_string())?;
-        *db = Some((db_path, conn));
+        let res: Option<String> = {
+            let mut rows = stmt
+                .query(params![norm_id.as_ref()])
+                .map_err(|e| e.to_string())?;
+            if let Some(row) = rows.next().map_err(|e| e.to_string())? {
+                let sig: String = row.get(0).map_err(|e| e.to_string())?;
+                Some(sig)
+            } else {
+                None
+            }
+        };
+        if res.is_some() {
+            res
+        } else if norm_id.as_ref() != tool_id {
+            let mut rows = stmt.query(params![tool_id]).map_err(|e| e.to_string())?;
+            if let Some(row) = rows.next().map_err(|e| e.to_string())? {
+                let sig: String = row.get(0).map_err(|e| e.to_string())?;
+                Some(sig)
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    };
+    if let Some(sig) = found {
+        if let Some(healed) = normalize_and_heal_signature(&sig) {
+            if healed != sig {
+                let _ = save_tool_signature(norm_id.as_ref(), &healed);
+            }
+            return Ok(Some(healed));
+        }
     }
-    let conn = &db
-        .as_ref()
-        .ok_or("tool signature db was not initialized")?
-        .1;
-    // Dropping rows and the cached statement ends the read before releasing the lock.
-    let mut stmt = conn
-        .prepare_cached("SELECT signature FROM tool_signatures WHERE tool_id = ?1 LIMIT 1")
-        .map_err(|e| e.to_string())?;
-    let mut rows = stmt.query(params![tool_id]).map_err(|e| e.to_string())?;
-    if let Some(row) = rows.next().map_err(|e| e.to_string())? {
-        let sig: String = row.get(0).map_err(|e| e.to_string())?;
-        Ok(Some(sig))
-    } else {
-        Ok(None)
-    }
+    Ok(None)
 }
 
 #[derive(Debug, Clone)]
@@ -510,65 +685,160 @@ pub fn save_thinking_record(
     }
     let conn = thinking_db()?;
     let now = chrono::Utc::now().timestamp_millis();
-    let tool_ids_json = serde_json::to_string(tool_ids).unwrap_or_else(|_| "[]".to_string());
+    let normalized_tool_ids: Vec<String> = tool_ids
+        .iter()
+        .map(|id| crate::proxy::common::utils::normalize_tool_id(id).into_owned())
+        .collect();
+    let tool_ids_json =
+        serde_json::to_string(&normalized_tool_ids).unwrap_or_else(|_| "[]".to_string());
+    let causal_tool_id = normalized_tool_ids
+        .iter()
+        .find(|id| is_synthetic_tool_id(id))
+        .map(|s| s.as_str());
+    let primary_tool_id = normalized_tool_ids.first().map(|s| s.as_str());
     // tool_names / full visible for tool turns are reconstructable from the next
     // request JSON at fill time. Do not write them.
-    let visible_persist = persist_visible(tool_ids, visible);
+    let visible_persist = persist_visible(&normalized_tool_ids, visible);
     let packed_thought = pack_thought(thought);
     let signature = persist_signature(signature);
 
-    // Align with in-memory ThinkingStore: only merge consecutive chunks of the
-    // current (latest) turn. Never rewrite an older turn that happens to share
-    // a fingerprint (e.g. two "你好" replies in the same session).
-    let latest_id: Option<i64> = conn
+    // 智能防叠加与幂等查重：只允许合并/更新当前会话中的【最新一条】活跃轮次（流式碎片拼接或更长思考补齐）
+    // 绝不能回溯更新历史早期轮次！
+    let latest_row: Option<(
+        i64,
+        usize,
+        Option<String>,
+        String,
+        Option<String>,
+        Option<String>,
+    )> = conn
         .query_row(
-            "SELECT id FROM thinking_records WHERE session_key = ?1 ORDER BY id DESC LIMIT 1",
+            "SELECT id, length(thought), signature, fingerprint, primary_tool_id, causal_tool_id
+             FROM thinking_records
+             WHERE session_key = ?1
+             ORDER BY id DESC LIMIT 1",
             params![session_key],
-            |r| r.get(0),
+            |r| {
+                Ok((
+                    r.get(0)?,
+                    r.get(1)?,
+                    r.get(2)?,
+                    r.get(3)?,
+                    r.get(4)?,
+                    r.get(5)?,
+                ))
+            },
         )
         .ok();
 
-    let updated = if let Some(id) = latest_id {
-        conn.execute(
-            "UPDATE thinking_records
-             SET thought = ?1, signature = ?2, tool_ids = ?3, tool_names = '[]', visible = ?4, created_at = ?5
-             WHERE id = ?6 AND fingerprint = ?7",
-            params![
-                packed_thought.as_slice(),
-                signature,
-                &tool_ids_json,
-                visible_persist,
-                now,
-                id,
-                fingerprint,
-            ],
-        )
-        .map_err(|e| e.to_string())?
-    } else {
-        0
+    let existing_id: Option<(i64, usize, Option<String>)> = match latest_row {
+        Some((id, len, sig, ref last_fp, ref last_tool_id, ref last_causal_id)) => {
+            let is_match = if let Some(c_id) = causal_tool_id {
+                last_causal_id.as_deref() == Some(c_id)
+                    || last_tool_id.as_deref() == Some(c_id)
+                    || last_causal_id
+                        .as_deref()
+                        .map(|s| crate::proxy::common::utils::normalize_tool_id(s))
+                        .as_deref()
+                        == Some(c_id)
+                    || last_tool_id
+                        .as_deref()
+                        .map(|s| crate::proxy::common::utils::normalize_tool_id(s))
+                        .as_deref()
+                        == Some(c_id)
+            } else if let Some(p_id) = primary_tool_id {
+                last_tool_id.as_deref() == Some(p_id)
+                    || last_tool_id
+                        .as_deref()
+                        .map(|s| crate::proxy::common::utils::normalize_tool_id(s))
+                        .as_deref()
+                        == Some(p_id)
+            } else {
+                last_fp == fingerprint && last_tool_id.is_none() && last_causal_id.is_none()
+            };
+            if is_match {
+                Some((id, len, sig))
+            } else {
+                None
+            }
+        }
+        None => None,
     };
 
-    if updated == 0 {
-        conn.execute(
-            "INSERT INTO thinking_records (session_key, fingerprint, thought, signature, tool_ids, tool_names, visible, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, '[]', ?6, ?7)",
-            params![
-                session_key,
-                fingerprint,
+    if let Some((id, old_thought_len, old_sig)) = existing_id {
+        // 已存在记录：检查是否需要更新（防止将已有实质思考覆盖为占位符，但允许补全更长思考或有效签名）
+        let incoming_has_meaningful_thought =
+            !crate::proxy::thinking_store::is_placeholder_thought(thought)
+                && !thought.trim().is_empty();
+        let old_is_dummy = old_thought_len <= 10; // "RAW1..." 或占位符非常短
+
+        let should_update_thought = incoming_has_meaningful_thought || old_is_dummy;
+        let healed_old_sig = old_sig.as_deref().and_then(normalize_and_heal_signature);
+        let effective_sig = signature.as_deref().or(healed_old_sig.as_deref());
+
+        if should_update_thought {
+            let mut stmt = conn
+                .prepare_cached(
+                    "UPDATE thinking_records
+                     SET thought = ?1, signature = ?2, tool_ids = ?3, visible = ?4, created_at = ?5, primary_tool_id = ?6, causal_tool_id = ?7
+                     WHERE id = ?8",
+                )
+                .map_err(|e| e.to_string())?;
+            stmt.execute(params![
                 packed_thought.as_slice(),
-                signature,
+                effective_sig,
                 &tool_ids_json,
                 visible_persist,
                 now,
-            ],
-        )
+                primary_tool_id,
+                causal_tool_id,
+                id,
+            ])
+            .map_err(|e| e.to_string())?;
+        } else if (signature.is_some() && signature.as_deref() != old_sig.as_deref())
+            || (healed_old_sig.as_deref() != old_sig.as_deref())
+        {
+            // 仅更新签名，保留已有的高质量实质思考（同时修复旧签名的脏数据）
+            let mut stmt = conn
+                .prepare_cached(
+                    "UPDATE thinking_records
+                     SET signature = ?1, created_at = ?2
+                     WHERE id = ?3",
+                )
+                .map_err(|e| e.to_string())?;
+            stmt.execute(params![effective_sig, now, id])
+                .map_err(|e| e.to_string())?;
+        }
+    } else {
+        // 全新轮次：插入新记录（同时写入 primary_tool_id 与 causal_tool_id 列）
+        let mut stmt = conn
+            .prepare_cached(
+                "INSERT INTO thinking_records (session_key, fingerprint, thought, signature, tool_ids, tool_names, visible, created_at, primary_tool_id, causal_tool_id)
+                 VALUES (?1, ?2, ?3, ?4, ?5, '[]', ?6, ?7, ?8, ?9)",
+            )
+            .map_err(|e| e.to_string())?;
+        stmt.execute(params![
+            session_key,
+            fingerprint,
+            packed_thought.as_slice(),
+            signature.as_deref(),
+            &tool_ids_json,
+            visible_persist,
+            now,
+            primary_tool_id,
+            causal_tool_id,
+        ])
         .map_err(|e| e.to_string())?;
     }
-    let _ = conn.execute(
-        "INSERT INTO thinking_sessions (session_key, last_accessed) VALUES (?1, ?2)
-         ON CONFLICT(session_key) DO UPDATE SET last_accessed = excluded.last_accessed",
-        params![session_key, now],
-    );
+
+    let mut session_stmt = conn
+        .prepare_cached(
+            "INSERT INTO thinking_sessions (session_key, last_accessed) VALUES (?1, ?2)
+             ON CONFLICT(session_key) DO UPDATE SET last_accessed = excluded.last_accessed",
+        )
+        .map_err(|e| e.to_string())?;
+    let _ = session_stmt.execute(params![session_key, now]);
+
     Ok(())
 }
 
@@ -578,10 +848,10 @@ pub fn load_thinking_records(session_key: &str) -> Result<Vec<PersistedThinkingR
     }
     let conn = thinking_db()?;
     let mut stmt = conn
-        .prepare(
-            "SELECT fingerprint, thought, signature, tool_ids, tool_names, visible 
-             FROM thinking_records 
-             WHERE session_key = ?1 
+        .prepare_cached(
+            "SELECT fingerprint, thought, signature, tool_ids, tool_names, visible
+             FROM thinking_records
+             WHERE session_key = ?1
              ORDER BY id ASC",
         )
         .map_err(|e| e.to_string())?;
@@ -613,7 +883,7 @@ pub fn load_thinking_records(session_key: &str) -> Result<Vec<PersistedThinkingR
             result.push(PersistedThinkingRecord {
                 fingerprint: fp,
                 thought: unpack_thought(&thought_raw),
-                signature: persist_signature(signature.as_deref()).map(str::to_string),
+                signature: persist_signature(signature.as_deref()),
                 tool_ids,
                 tool_names,
                 visible,
@@ -621,6 +891,363 @@ pub fn load_thinking_records(session_key: &str) -> Result<Vec<PersistedThinkingR
         }
     }
     Ok(result)
+}
+
+/// 根据 tool_id (因果伪哈希 ID 或原生 ID) 精准穿透点查历史思考
+/// 采用双轨索引极速点查 + 老数据自动静默自愈机制
+pub fn load_thinking_by_tool_id(
+    session_key: &str,
+    tool_id: &str,
+) -> Result<Option<PersistedThinkingRecord>, String> {
+    if session_key.is_empty() || tool_id.is_empty() {
+        return Ok(None);
+    }
+    let norm_id = crate::proxy::common::utils::normalize_tool_id(tool_id);
+    let mut candidate_ids = vec![norm_id.as_ref()];
+    if norm_id.as_ref() != tool_id {
+        candidate_ids.push(tool_id);
+    }
+
+    let conn = thinking_db()?;
+
+    for candidate in candidate_ids {
+        // 1. Track 1 (Fastest Path): 优先按因果伪哈希 ID 走 idx_thinking_rec_causal 专属局部索引 (0.02ms 纳秒级命中)
+        let mut causal_stmt = conn
+            .prepare_cached(
+                "SELECT id, fingerprint, thought, signature, tool_ids, tool_names, visible
+                 FROM thinking_records
+                 WHERE session_key = ?1 AND causal_tool_id = ?2
+                 ORDER BY id DESC LIMIT 1",
+            )
+            .map_err(|e| e.to_string())?;
+
+        let mut causal_rows = causal_stmt
+            .query(params![session_key, candidate])
+            .map_err(|e| e.to_string())?;
+
+        if let Some(row) = causal_rows.next().map_err(|e| e.to_string())? {
+            let rec_id: i64 = row.get(0).map_err(|e| e.to_string())?;
+            let fp: String = row.get(1).map_err(|e| e.to_string())?;
+            let thought_raw: Vec<u8> = row.get(2).map_err(|e| e.to_string())?;
+            let raw_signature: Option<String> = row.get(3).map_err(|e| e.to_string())?;
+            let tool_ids_str: String = row.get(4).map_err(|e| e.to_string())?;
+            let tool_names_str: String = row.get(5).map_err(|e| e.to_string())?;
+            let visible: String = row.get(6).map_err(|e| e.to_string())?;
+            let tool_ids: Vec<String> = serde_json::from_str(&tool_ids_str).unwrap_or_default();
+            let tool_names: Vec<String> = serde_json::from_str(&tool_names_str).unwrap_or_default();
+            let healed_sig = persist_signature(raw_signature.as_deref());
+
+            // 反向写回优化：若数据库中存储了损坏/非标准签名，命中后自愈并写回更新 SQLite
+            if let Some(ref h_sig) = healed_sig {
+                if raw_signature.as_ref() != Some(h_sig) {
+                    let _ = conn.execute(
+                        "UPDATE thinking_records SET signature = ?1 WHERE id = ?2",
+                        params![h_sig, rec_id],
+                    );
+                }
+            }
+
+            return Ok(Some(PersistedThinkingRecord {
+                fingerprint: fp,
+                thought: unpack_thought(&thought_raw),
+                signature: healed_sig,
+                tool_ids,
+                tool_names,
+                visible,
+            }));
+        }
+
+        // 2. Track 2 (Legacy Path): 兼容旧版 primary_tool_id (走 idx_thinking_rec_tool 索引点查)
+        let mut primary_stmt = conn
+            .prepare_cached(
+                "SELECT id, fingerprint, thought, signature, tool_ids, tool_names, visible
+                 FROM thinking_records
+                 WHERE session_key = ?1 AND primary_tool_id = ?2
+                 ORDER BY id DESC LIMIT 1",
+            )
+            .map_err(|e| e.to_string())?;
+
+        let mut primary_rows = primary_stmt
+            .query(params![session_key, candidate])
+            .map_err(|e| e.to_string())?;
+
+        if let Some(row) = primary_rows.next().map_err(|e| e.to_string())? {
+            let rec_id: i64 = row.get(0).map_err(|e| e.to_string())?;
+            let fp: String = row.get(1).map_err(|e| e.to_string())?;
+            let thought_raw: Vec<u8> = row.get(2).map_err(|e| e.to_string())?;
+            let raw_signature: Option<String> = row.get(3).map_err(|e| e.to_string())?;
+            let tool_ids_str: String = row.get(4).map_err(|e| e.to_string())?;
+            let tool_names_str: String = row.get(5).map_err(|e| e.to_string())?;
+            let visible: String = row.get(6).map_err(|e| e.to_string())?;
+            let tool_ids: Vec<String> = serde_json::from_str(&tool_ids_str).unwrap_or_default();
+            let tool_names: Vec<String> = serde_json::from_str(&tool_names_str).unwrap_or_default();
+            let healed_sig = persist_signature(raw_signature.as_deref());
+
+            // 3. Track 3 (In-Place Self-Healing): 若当前请求使用的是因果伪哈希 ID，顺手静默修复老数据
+            if is_synthetic_tool_id(candidate) {
+                let _ = conn.execute(
+                    "UPDATE thinking_records SET causal_tool_id = ?1 WHERE id = ?2 AND causal_tool_id IS NULL",
+                    params![candidate, rec_id],
+                );
+            }
+            if let Some(ref h_sig) = healed_sig {
+                if raw_signature.as_ref() != Some(h_sig) {
+                    let _ = conn.execute(
+                        "UPDATE thinking_records SET signature = ?1 WHERE id = ?2",
+                        params![h_sig, rec_id],
+                    );
+                }
+            }
+
+            return Ok(Some(PersistedThinkingRecord {
+                fingerprint: fp,
+                thought: unpack_thought(&thought_raw),
+                signature: healed_sig,
+                tool_ids,
+                tool_names,
+                visible,
+            }));
+        }
+
+        // 4. Track 4 (Fallback Path): 极端情况兼容最古老旧记录 (tool_ids 列表内模糊包含)
+        let pattern = format!("%\"{}\"%", candidate);
+        let mut fallback_stmt = conn
+            .prepare_cached(
+                "SELECT id, fingerprint, thought, signature, tool_ids, tool_names, visible
+                 FROM thinking_records
+                 WHERE session_key = ?1 AND tool_ids LIKE ?2
+                 ORDER BY id DESC LIMIT 1",
+            )
+            .map_err(|e| e.to_string())?;
+
+        let mut fallback_rows = fallback_stmt
+            .query(params![session_key, pattern])
+            .map_err(|e| e.to_string())?;
+
+        if let Some(row) = fallback_rows.next().map_err(|e| e.to_string())? {
+            let rec_id: i64 = row.get(0).map_err(|e| e.to_string())?;
+            let fp: String = row.get(1).map_err(|e| e.to_string())?;
+            let thought_raw: Vec<u8> = row.get(2).map_err(|e| e.to_string())?;
+            let raw_signature: Option<String> = row.get(3).map_err(|e| e.to_string())?;
+            let tool_ids_str: String = row.get(4).map_err(|e| e.to_string())?;
+            let tool_names_str: String = row.get(5).map_err(|e| e.to_string())?;
+            let visible: String = row.get(6).map_err(|e| e.to_string())?;
+            let tool_ids: Vec<String> = serde_json::from_str(&tool_ids_str).unwrap_or_default();
+            let tool_names: Vec<String> = serde_json::from_str(&tool_names_str).unwrap_or_default();
+            let healed_sig = persist_signature(raw_signature.as_deref());
+
+            if is_synthetic_tool_id(candidate) {
+                let _ = conn.execute(
+                    "UPDATE thinking_records SET causal_tool_id = ?1 WHERE id = ?2 AND causal_tool_id IS NULL",
+                    params![candidate, rec_id],
+                );
+            }
+            if let Some(ref h_sig) = healed_sig {
+                if raw_signature.as_ref() != Some(h_sig) {
+                    let _ = conn.execute(
+                        "UPDATE thinking_records SET signature = ?1 WHERE id = ?2",
+                        params![h_sig, rec_id],
+                    );
+                }
+            }
+
+            return Ok(Some(PersistedThinkingRecord {
+                fingerprint: fp,
+                thought: unpack_thought(&thought_raw),
+                signature: healed_sig,
+                tool_ids,
+                tool_names,
+                visible,
+            }));
+        }
+    }
+
+    Ok(None)
+}
+
+/// 根据 signature 精准穿透点查历史思考（利用 idx_thinking_rec_sig 索引）
+pub fn load_thinking_by_signature(
+    session_key: &str,
+    signature: &str,
+) -> Result<Option<PersistedThinkingRecord>, String> {
+    if session_key.is_empty() || signature.is_empty() {
+        return Ok(None);
+    }
+    let conn = thinking_db()?;
+    let mut stmt = conn
+        .prepare_cached(
+            "SELECT id, fingerprint, thought, signature, tool_ids, tool_names, visible
+             FROM thinking_records
+             WHERE session_key = ?1 AND signature = ?2
+             ORDER BY id DESC LIMIT 1",
+        )
+        .map_err(|e| e.to_string())?;
+
+    let mut rows = stmt
+        .query(params![session_key, signature])
+        .map_err(|e| e.to_string())?;
+
+    if let Some(row) = rows.next().map_err(|e| e.to_string())? {
+        let rec_id: i64 = row.get(0).map_err(|e| e.to_string())?;
+        let fp: String = row.get(1).map_err(|e| e.to_string())?;
+        let thought_raw: Vec<u8> = row.get(2).map_err(|e| e.to_string())?;
+        let raw_signature: Option<String> = row.get(3).map_err(|e| e.to_string())?;
+        let tool_ids_str: String = row.get(4).map_err(|e| e.to_string())?;
+        let tool_names_str: String = row.get(5).map_err(|e| e.to_string())?;
+        let visible: String = row.get(6).map_err(|e| e.to_string())?;
+        let tool_ids: Vec<String> = serde_json::from_str(&tool_ids_str).unwrap_or_default();
+        let tool_names: Vec<String> = serde_json::from_str(&tool_names_str).unwrap_or_default();
+        let healed_sig = persist_signature(raw_signature.as_deref());
+
+        if let Some(ref h_sig) = healed_sig {
+            if raw_signature.as_ref() != Some(h_sig) {
+                let _ = conn.execute(
+                    "UPDATE thinking_records SET signature = ?1 WHERE id = ?2",
+                    params![h_sig, rec_id],
+                );
+            }
+        }
+
+        Ok(Some(PersistedThinkingRecord {
+            fingerprint: fp,
+            thought: unpack_thought(&thought_raw),
+            signature: healed_sig,
+            tool_ids,
+            tool_names,
+            visible,
+        }))
+    } else {
+        Ok(None)
+    }
+}
+
+/// 为 UI 展示层兜底提供：按会话查找最新记录中的权威签名 (支持带租户前缀的容错匹配)
+pub fn lookup_latest_thinking_signature(session_id: &str) -> Option<String> {
+    if session_id.trim().is_empty() {
+        return None;
+    }
+    let conn = thinking_db().ok()?;
+    let suffix = format!("%:{}", session_id.trim());
+    let (id, raw_sig): (i64, String) = conn
+        .query_row(
+            "SELECT id, signature FROM thinking_records 
+         WHERE (session_key = ?1 OR session_key LIKE ?2) 
+           AND signature IS NOT NULL 
+         ORDER BY id DESC LIMIT 1",
+            rusqlite::params![session_id.trim(), suffix],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .ok()?;
+    let healed = normalize_and_heal_signature(&raw_sig);
+    if let Some(ref h) = healed {
+        if h != &raw_sig {
+            let _ = conn.execute(
+                "UPDATE thinking_records SET signature = ?1 WHERE id = ?2",
+                rusqlite::params![h, id],
+            );
+        }
+    }
+    healed
+}
+
+/// 为 UI 展示层兜底提供：按思考内容片段模糊查找权威签名
+/// 采用逆序扫描最新思考记录并自动解压 GZIP，杜绝 SQL LIKE 对二进制压缩 BLOB 检索失配
+pub fn lookup_signature_by_thought_snippet(snippet: &str) -> Option<String> {
+    let clean = snippet.trim();
+    if clean.is_empty() {
+        return None;
+    }
+    let conn = thinking_db().ok()?;
+    let mut stmt = conn
+        .prepare_cached(
+            "SELECT id, thought, signature FROM thinking_records
+             WHERE signature IS NOT NULL
+             ORDER BY id DESC LIMIT 50",
+        )
+        .ok()?;
+
+    let rows = stmt
+        .query_map([], |r| {
+            let id: i64 = r.get(0)?;
+            let thought_raw: Vec<u8> = r.get(1)?;
+            let raw_sig: String = r.get(2)?;
+            Ok((id, thought_raw, raw_sig))
+        })
+        .ok()?;
+
+    for row in rows.flatten() {
+        let (id, thought_raw, raw_sig) = row;
+        let unpacked = unpack_thought(&thought_raw);
+        if unpacked.contains(clean) {
+            let healed = normalize_and_heal_signature(&raw_sig);
+            if let Some(ref h) = healed {
+                if h != &raw_sig {
+                    let _ = conn.execute(
+                        "UPDATE thinking_records SET signature = ?1 WHERE id = ?2",
+                        rusqlite::params![h, id],
+                    );
+                }
+            }
+            return healed;
+        }
+    }
+    None
+}
+
+/// 根据 fingerprint 精准穿透点查纯文本历史思考（利用 idx_thinking_rec_fp 索引）
+pub fn load_thinking_by_fingerprint(
+    session_key: &str,
+    fingerprint: &str,
+) -> Result<Option<PersistedThinkingRecord>, String> {
+    if session_key.is_empty() || fingerprint.is_empty() {
+        return Ok(None);
+    }
+    let conn = thinking_db()?;
+    let mut stmt = conn
+        .prepare_cached(
+            "SELECT id, fingerprint, thought, signature, tool_ids, tool_names, visible
+             FROM thinking_records
+             WHERE session_key = ?1 AND fingerprint = ?2
+             ORDER BY id DESC LIMIT 1",
+        )
+        .map_err(|e| e.to_string())?;
+
+    let mut rows = stmt
+        .query(params![session_key, fingerprint])
+        .map_err(|e| e.to_string())?;
+
+    if let Some(row) = rows.next().map_err(|e| e.to_string())? {
+        let rec_id: i64 = row.get(0).map_err(|e| e.to_string())?;
+        let fp: String = row.get(1).map_err(|e| e.to_string())?;
+        let thought_raw: Vec<u8> = row.get(2).map_err(|e| e.to_string())?;
+        let raw_signature: Option<String> = row.get(3).map_err(|e| e.to_string())?;
+        let tool_ids_str: String = row.get(4).map_err(|e| e.to_string())?;
+        let tool_names_str: String = row.get(5).map_err(|e| e.to_string())?;
+        let visible: String = row.get(6).map_err(|e| e.to_string())?;
+        let tool_ids: Vec<String> = serde_json::from_str(&tool_ids_str).unwrap_or_default();
+        let tool_names: Vec<String> = serde_json::from_str(&tool_names_str).unwrap_or_default();
+        let healed_sig = persist_signature(raw_signature.as_deref());
+
+        if let Some(ref h_sig) = healed_sig {
+            if raw_signature.as_ref() != Some(h_sig) {
+                let _ = conn.execute(
+                    "UPDATE thinking_records SET signature = ?1 WHERE id = ?2",
+                    params![h_sig, rec_id],
+                );
+            }
+        }
+
+        Ok(Some(PersistedThinkingRecord {
+            fingerprint: fp,
+            thought: unpack_thought(&thought_raw),
+            signature: healed_sig,
+            tool_ids,
+            tool_names,
+            visible,
+        }))
+    } else {
+        Ok(None)
+    }
 }
 
 pub fn touch_thinking_session(session_key: &str) -> Result<usize, String> {
@@ -657,30 +1284,135 @@ pub fn delete_thinking_records_except_fingerprints(
     .map_err(|e| e.to_string())
 }
 
-pub fn delete_thinking_records_for_session(session_key: &str) -> Result<usize, String> {
-    let conn = thinking_db()?;
-    let _ = conn.execute(
-        "DELETE FROM thinking_sessions WHERE session_key = ?1",
-        params![session_key],
-    );
+pub fn delete_tool_signatures_for_session(session_key: &str) -> Result<usize, String> {
+    let clean_key = session_key.trim();
+    if clean_key.is_empty() {
+        return Ok(0);
+    }
+    let conn = connect_db()?;
+    let p1 = format!("{clean_key}\u{1f}%");
+    let p2 = format!("%:{clean_key}\u{1f}%");
     conn.execute(
-        "DELETE FROM thinking_records WHERE session_key = ?1",
-        params![session_key],
+        "DELETE FROM tool_signatures WHERE tool_id LIKE ?1 OR tool_id LIKE ?2",
+        params![p1, p2],
     )
     .map_err(|e| e.to_string())
+}
+
+pub fn delete_thinking_records_for_session(session_key: &str) -> Result<usize, String> {
+    let clean = session_key.trim();
+    if clean.is_empty() {
+        return Ok(0);
+    }
+    let conn = thinking_db()?;
+    let suffix = format!("%:{}", clean);
+    let _ = conn.execute(
+        "DELETE FROM thinking_sessions WHERE session_key = ?1 OR session_key LIKE ?2",
+        params![clean, suffix],
+    );
+    conn.execute(
+        "DELETE FROM thinking_records WHERE session_key = ?1 OR session_key LIKE ?2",
+        params![clean, suffix],
+    )
+    .map_err(|e| e.to_string())
+}
+
+/// 精准净化思考记录表中的非法异构签名（保留思考文本与其它健康签名）
+pub fn purge_foreign_signatures_for_session_with_model(
+    session_key: &str,
+    target_model: &str,
+) -> Result<usize, String> {
+    let is_gemini = target_model.to_lowercase().contains("gemini");
+    let is_claude = target_model.to_lowercase().contains("claude");
+    if (!is_gemini && !is_claude) || session_key.is_empty() {
+        return Ok(0);
+    }
+
+    let conn = thinking_db()?;
+    let mut stmt = conn
+        .prepare_cached("SELECT id, signature FROM thinking_records WHERE session_key = ?1 AND signature IS NOT NULL")
+        .map_err(|e| e.to_string())?;
+
+    let rows = stmt
+        .query_map(params![session_key], |row| {
+            let id: i64 = row.get(0)?;
+            let sig: String = row.get(1)?;
+            Ok((id, sig))
+        })
+        .map_err(|e| e.to_string())?;
+
+    let mut ids_to_null = Vec::new();
+    for row in rows.flatten() {
+        let (id, sig) = row;
+        let is_foreign = if is_gemini {
+            !crate::proxy::thinking_store::is_likely_gemini_signature(&sig)
+        } else if is_claude {
+            !crate::proxy::thinking_store::is_claude_signature(&sig)
+        } else {
+            false
+        };
+        if is_foreign {
+            ids_to_null.push(id);
+        }
+    }
+
+    let mut total_updated = 0;
+    if !ids_to_null.is_empty() {
+        let mut update_stmt = conn
+            .prepare_cached("UPDATE thinking_records SET signature = NULL WHERE id = ?1")
+            .map_err(|e| e.to_string())?;
+        for id in ids_to_null {
+            if let Ok(n) = update_stmt.execute(params![id]) {
+                total_updated += n;
+            }
+        }
+    }
+
+    Ok(total_updated)
+}
+
+/// 兼容旧接口：默认按 Gemini 清洗
+pub fn purge_foreign_signatures_for_session(session_key: &str) -> Result<usize, String> {
+    purge_foreign_signatures_for_session_with_model(session_key, "gemini")
+}
+
+/// 全量清空思考块数据库 (仅清空 thinking_records / thinking_sessions / tool_signatures，绝不触碰 request_logs 日志)
+pub fn clear_all_thinking_data() -> Result<usize, String> {
+    let mut total_deleted = 0;
+    // 1. 清空 thinking_store.db 中的记录与会话
+    let conn = thinking_db()?;
+    let deleted = conn
+        .execute("DELETE FROM thinking_records", [])
+        .map_err(|e| e.to_string())?;
+    total_deleted += deleted;
+    let _ = conn.execute("DELETE FROM thinking_sessions", []);
+    let _ = conn.execute("VACUUM", []);
+
+    // 2. 清空 proxy_logs.db 中残留的历史工具签名表与陈旧思考表 (绝不触碰 request_logs)
+    if let Ok(log_conn) = connect_db() {
+        let _ = log_conn.execute("DELETE FROM tool_signatures", []);
+        let _ = log_conn.execute("DELETE FROM thinking_records", []);
+        let _ = log_conn.execute("DELETE FROM thinking_sessions", []);
+    }
+
+    Ok(total_deleted)
+}
+
+pub fn get_thinking_records_count() -> Result<usize, String> {
+    let conn = thinking_db()?;
+    let count: usize = conn
+        .query_row("SELECT COUNT(*) FROM thinking_records", [], |row| {
+            row.get(0)
+        })
+        .unwrap_or(0);
+    Ok(count)
 }
 
 pub fn cleanup_old_thinking_records(days: i64) -> Result<usize, String> {
     let cutoff = chrono::Utc::now().timestamp_millis() - (days * 24 * 3600 * 1000);
     let deleted_tools = connect_db()
         .ok()
-        .and_then(|conn| {
-            conn.execute(
-                "DELETE FROM tool_signatures WHERE created_at < ?1",
-                params![cutoff],
-            )
-            .ok()
-        })
+        .and_then(|conn| prune_tool_signatures(&conn, MAX_TOOL_SIGNATURES_ROWS, days).ok())
         .unwrap_or(0);
     let conn = thinking_db()?;
     let deleted_records = conn
@@ -711,12 +1443,8 @@ fn apply_retention_with_connection(
     conn: &Connection,
     policy: &LogRetentionConfig,
 ) -> Result<(usize, usize), String> {
-    let now = chrono::Utc::now().timestamp_millis();
-    let body_cutoff = now - (policy.max_body_age_hours as i64 * 3600 * 1000);
-    let bodies_cleared = conn.execute(
-        "UPDATE request_logs SET request_body = NULL, upstream_request_body = NULL, response_body = NULL WHERE timestamp < ?1 AND (request_body IS NOT NULL OR upstream_request_body IS NOT NULL OR response_body IS NOT NULL)",
-        [body_cutoff],
-    ).map_err(|e| e.to_string())?;
+    // 请求体不再按时间强制清空，完全由容量上限与行数滑动窗口整体托管，保留完整报文
+    let bodies_cleared = 0;
 
     // 注意：已移除基于 max_age_days 的按天整行删除逻辑，改为条数上限与空间上限滑动窗口淘汰
     let mut rows_deleted = 0;
@@ -879,6 +1607,19 @@ fn make_room(conn: &Connection, budget: u64, log_bytes: u64) -> Result<(), Strin
         return Ok(());
     }
 
+    let auto_vacuum: i64 = conn
+        .pragma_query_value(None, "auto_vacuum", |r| r.get(0))
+        .unwrap_or(0);
+    // Legacy files cannot shrink: even reusing all free pages still needs WAL headroom.
+    if auto_vacuum == 0
+        && disk_bytes(conn)?
+            .saturating_add(log_bytes.saturating_mul(2))
+            .saturating_add(64 * 1024)
+            > budget
+    {
+        return Err("legacy proxy log database cannot shrink within budget".to_string());
+    }
+
     // 优先触发 30% 滑动窗口机制清理最尾部历史日志
     let (evicted, _) = evict_sliding_window(conn, budget)?;
     if evicted > 0 {
@@ -914,7 +1655,27 @@ fn make_room(conn: &Connection, budget: u64, log_bytes: u64) -> Result<(), Strin
     if projected_bytes(conn, log_bytes)? <= budget {
         Ok(())
     } else {
-        Err("proxy log disk budget exhausted".to_string())
+        // [FIX] 防范非日志表 (如 tool_signatures) 导致的磁盘配额死锁：
+        // 若已执行多轮清理但物理文件依然超预算，且 request_logs 表已删空或仅存微量记录，
+        // 绝不可直接抛错导致全代理请求日志无法持久化并彻底致盲监控。
+        let remaining_logs: i64 = conn
+            .query_row("SELECT COUNT(*) FROM request_logs", [], |r| r.get(0))
+            .unwrap_or(0);
+        if remaining_logs <= 1 {
+            // [Defect 12] 尝试主动修剪 tool_signatures 表以释放空间
+            let _ = prune_tool_signatures(conn, MAX_TOOL_SIGNATURES_ROWS / 2, 3);
+            let _ = reclaim_space(conn);
+            if projected_bytes(conn, log_bytes)? <= budget {
+                return Ok(());
+            }
+            tracing::warn!(
+                "[ProxyLog] Disk budget reached ({:.2} MB) but database size is occupied by non-log tables. Preserving service logging availability.",
+                budget as f64 / 1_048_576.0
+            );
+            Ok(())
+        } else {
+            Err("proxy log disk budget exhausted".to_string())
+        }
     }
 }
 
@@ -947,6 +1708,7 @@ fn save_log_with_connection(
         + [
             &log.model,
             &log.mapped_model,
+            &log.upstream_model,
             &log.account_email,
             &log.client_ip,
             &log.error,
@@ -986,8 +1748,8 @@ fn save_log_with_connection(
     make_room(conn, budget, log_bytes)?;
 
     conn.execute(
-        "INSERT INTO request_logs (id, timestamp, method, url, status, duration, model, error, request_body, upstream_request_body, response_body, input_tokens, output_tokens, cached_tokens, account_email, mapped_model, protocol, client_ip, username, request_headers, upstream_request_headers, response_headers)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22)",
+        "INSERT INTO request_logs (id, timestamp, method, url, status, duration, model, error, request_body, upstream_request_body, response_body, input_tokens, output_tokens, cached_tokens, reasoning_tokens, account_email, mapped_model, protocol, client_ip, username, request_headers, upstream_request_headers, response_headers, session_id, upstream_model)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25)",
         params![
             log.id,
             log.timestamp,
@@ -1003,6 +1765,7 @@ fn save_log_with_connection(
             log.input_tokens,
             log.output_tokens,
             log.cached_tokens,
+            log.reasoning_tokens,
             log.account_email,
             log.mapped_model,
             log.protocol,
@@ -1011,6 +1774,8 @@ fn save_log_with_connection(
             log.request_headers,
             log.upstream_request_headers,
             log.response_headers,
+            log.session_id,
+            log.upstream_model,
         ],
     ).map_err(|e| e.to_string())?;
 
@@ -1025,8 +1790,9 @@ pub fn get_logs_summary(limit: usize, offset: usize) -> Result<Vec<ProxyRequestL
         .prepare(
             "SELECT id, timestamp, method, url, status, duration, model, substr(error, 1, 1024),
                 NULL as request_body, NULL as upstream_request_body, NULL as response_body,
-                input_tokens, output_tokens, cached_tokens, account_email, mapped_model, protocol, client_ip, username,
-                NULL as request_headers, NULL as upstream_request_headers, NULL as response_headers
+                input_tokens, output_tokens, cached_tokens, reasoning_tokens, account_email, mapped_model, protocol, client_ip, username,
+                NULL as request_headers, NULL as upstream_request_headers, response_headers,
+                session_id, upstream_model
          FROM request_logs 
          ORDER BY timestamp DESC 
          LIMIT ?1 OFFSET ?2",
@@ -1081,8 +1847,9 @@ pub fn get_log_detail(log_id: &str) -> Result<ProxyRequestLog, String> {
         .prepare(
             "SELECT id, timestamp, method, url, status, duration, model, error,
                 request_body, upstream_request_body, response_body, input_tokens, output_tokens,
-                cached_tokens, account_email, mapped_model, protocol, client_ip, username,
-                request_headers, upstream_request_headers, response_headers
+                cached_tokens, reasoning_tokens, account_email, mapped_model, protocol, client_ip, username,
+                request_headers, upstream_request_headers, response_headers,
+                session_id, upstream_model
          FROM request_logs
          WHERE id = ?1",
         )
@@ -1132,11 +1899,8 @@ mod tool_signature_tests {
     use super::*;
     use crate::proxy::monitor::prompt_log_tests::TestDataDir;
 
-    static TEST_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
     #[test]
     fn tool_signature_misses_reuse_readonly_connection() {
-        let _guard = TEST_MUTEX.lock().unwrap();
         let _dir = TestDataDir::new();
         assert!(load_tool_signature("missing").is_err());
         assert!(!get_proxy_db_path().unwrap().exists());
@@ -1182,7 +1946,6 @@ mod tool_signature_tests {
 
     #[test]
     fn tool_signature_reads_follow_writes_and_data_dir_changes() {
-        let _guard = TEST_MUTEX.lock().unwrap();
         let _dir = TestDataDir::new();
         init_db().unwrap();
         let signature = "s".repeat(60);
@@ -1210,17 +1973,429 @@ mod tool_signature_tests {
         assert_eq!(load_tool_signature("tool").unwrap(), Some(replacement));
         TOOL_SIGNATURE_DB.get().unwrap().lock().unwrap().take();
     }
+
+    #[test]
+    fn test_tool_signatures_ttl_and_row_bound_pruning() {
+        let _dir = TestDataDir::new();
+        init_db().unwrap();
+        let conn = connect_db().unwrap();
+
+        let now = chrono::Utc::now().timestamp_millis();
+        let old_time = now - (10 * 24 * 3600 * 1000); // 10 days ago (expired under 7-day TTL)
+        let fresh_time = now - (2 * 24 * 3600 * 1000); // 2 days ago (valid)
+
+        // Insert 3 expired signatures and 2 fresh signatures
+        for i in 1..=3 {
+            conn.execute(
+                "INSERT INTO tool_signatures (tool_id, signature, created_at) VALUES (?1, ?2, ?3)",
+                params![format!("old_tool_{}", i), "sig_old", old_time + i],
+            )
+            .unwrap();
+        }
+        for i in 1..=2 {
+            conn.execute(
+                "INSERT INTO tool_signatures (tool_id, signature, created_at) VALUES (?1, ?2, ?3)",
+                params![format!("fresh_tool_{}", i), "sig_fresh", fresh_time + i],
+            )
+            .unwrap();
+        }
+
+        let total: i64 = conn
+            .query_row("SELECT COUNT(*) FROM tool_signatures", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(total, 5);
+
+        // 1. Test TTL pruning (7 days)
+        let deleted = prune_tool_signatures(&conn, 100, 7).unwrap();
+        assert_eq!(deleted, 3);
+        let remaining: i64 = conn
+            .query_row("SELECT COUNT(*) FROM tool_signatures", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(remaining, 2);
+
+        // 2. Test row bounding (max_rows)
+        // Insert 10 additional signatures with ascending timestamps
+        for i in 1..=10 {
+            conn.execute(
+                "INSERT INTO tool_signatures (tool_id, signature, created_at) VALUES (?1, ?2, ?3)",
+                params![format!("bounded_tool_{}", i), "sig", now + i],
+            )
+            .unwrap();
+        }
+        // Total rows: 2 + 10 = 12
+        let total: i64 = conn
+            .query_row("SELECT COUNT(*) FROM tool_signatures", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(total, 12);
+
+        // Bound to 5 rows (excess 7 rows should be pruned, keeping the 5 newest)
+        let deleted = prune_tool_signatures(&conn, 5, 0).unwrap();
+        assert_eq!(deleted, 7);
+
+        let final_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM tool_signatures", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(final_count, 5);
+
+        // The remaining 5 tools should be the latest bounded_tool_6 through 10
+        let newest_exists: bool = conn
+            .query_row(
+                "SELECT COUNT(*) FROM tool_signatures WHERE tool_id = 'bounded_tool_10'",
+                [],
+                |r| r.get::<_, i64>(0),
+            )
+            .unwrap()
+            == 1;
+        assert!(newest_exists);
+
+        let oldest_pruned: bool = conn
+            .query_row(
+                "SELECT COUNT(*) FROM tool_signatures WHERE tool_id = 'fresh_tool_1'",
+                [],
+                |r| r.get::<_, i64>(0),
+            )
+            .unwrap()
+            == 0;
+        assert!(oldest_pruned);
+    }
+
+    #[test]
+    fn test_save_tool_signature_prunes_expired_signatures() {
+        let _dir = TestDataDir::new();
+        init_db().unwrap();
+        let conn = connect_db().unwrap();
+
+        let now = chrono::Utc::now().timestamp_millis();
+        let expired = now - (15 * 24 * 3600 * 1000); // 15 days ago
+
+        // Insert an expired signature directly into the DB
+        conn.execute(
+            "INSERT INTO tool_signatures (tool_id, signature, created_at) VALUES (?1, ?2, ?3)",
+            params![
+                "expired_tool",
+                "valid_base64_signature_here_which_is_long_enough",
+                expired
+            ],
+        )
+        .unwrap();
+
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM tool_signatures", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 1);
+
+        // Now calling save_tool_signature should automatically trigger pruning of expired entries
+        let sig = "s".repeat(60);
+        save_tool_signature("new_tool", &sig).unwrap();
+
+        // Expired signature must have been pruned, only new_tool remains
+        let remaining: i64 = conn
+            .query_row("SELECT COUNT(*) FROM tool_signatures", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(remaining, 1);
+
+        let new_found = load_tool_signature("new_tool").unwrap();
+        assert_eq!(new_found, Some(sig));
+
+        let expired_found = load_tool_signature("expired_tool").unwrap();
+        assert_eq!(expired_found, None);
+    }
+}
+
+#[cfg(test)]
+mod thinking_sqlite_tests {
+    use super::*;
+    use crate::proxy::monitor::prompt_log_tests::TestDataDir;
+
+    #[test]
+    fn test_thinking_record_deduplication_and_penetration_lookup() {
+        let _dir = TestDataDir::new();
+
+        let session_key = "test_tenant:sess-123456";
+        let tool_id = "call_abc999";
+        let real_sig = "s".repeat(60);
+
+        // 1. 首次写入：实质思考 + tool_id
+        save_thinking_record(
+            session_key,
+            "fp_turn1",
+            "This is deep analytical thinking about rust code",
+            Some(&real_sig),
+            &[tool_id.to_string()],
+            &[],
+            "visible",
+        )
+        .unwrap();
+
+        // 2. 二次写入相同 tool_id（例如客户端再次回传包含占位符的相同轮次）：绝不叠加新行，绝不将实质思考覆盖为占位符！
+        save_thinking_record(
+            session_key,
+            "fp_turn1",
+            "...",
+            Some(&real_sig),
+            &[tool_id.to_string()],
+            &[],
+            "visible",
+        )
+        .unwrap();
+
+        // 3. 验证 SQLite 中仅存 1 行，且保留高质量思考
+        let all = load_thinking_records(session_key).unwrap();
+        assert_eq!(all.len(), 1, "Duplicate tool saves must be deduplicated!");
+        assert_eq!(
+            all[0].thought,
+            "This is deep analytical thinking about rust code"
+        );
+        assert_eq!(all[0].signature, Some(real_sig.clone()));
+
+        // 4. 精准穿透点查 tool_id
+        let loaded = load_thinking_by_tool_id(session_key, tool_id).unwrap();
+        assert!(loaded.is_some());
+        let rec = loaded.unwrap();
+        assert_eq!(
+            rec.thought,
+            "This is deep analytical thinking about rust code"
+        );
+        assert_eq!(rec.signature, Some(real_sig));
+
+        // 5. 不存在的 tool_id 应当正确返回 None
+        let missing = load_thinking_by_tool_id(session_key, "call_nonexistent").unwrap();
+        assert!(missing.is_none());
+
+        // 6. 纯文本指纹点查测试
+        let text_fp = "fp_pure_text_1";
+        save_thinking_record(
+            session_key,
+            text_fp,
+            "Pure text reasoning",
+            None,
+            &[],
+            &[],
+            "pure text visible",
+        )
+        .unwrap();
+        let loaded_text = load_thinking_by_fingerprint(session_key, text_fp).unwrap();
+        assert!(loaded_text.is_some());
+        assert_eq!(loaded_text.unwrap().thought, "Pure text reasoning");
+    }
+
+    #[test]
+    fn test_signature_healing_and_write_back() {
+        use base64::Engine;
+        let _dir = TestDataDir::new();
+        init_db().unwrap();
+
+        let session_key = "test_tenant:sess-healing";
+        let tool_id = "call_corrupted_1";
+
+        // 构造一个典型的被错误解码为 UTF-8 原始 Protobuf 二进制的签名 (首字节 0x12)
+        let raw_proto_bytes = [
+            0x12, 0x26, 0x0a, 0x24, b'e', b'2', b'4', b'8', b'3', b'0', b'a', b'7', b'-', b'5',
+            b'c', b'd', b'6', b'-', b'4', b'2', b'f', b'e', b'-', b'9', b'9', b'8', b'b', b'-',
+            b'e', b'e', b'5', b'3', b'9', b'e', b'7', b'2', b'b', b'9', b'c', b'3',
+        ];
+        let raw_corrupted_sig = String::from_utf8(raw_proto_bytes.to_vec()).unwrap();
+        let expected_base64 = base64::engine::general_purpose::STANDARD.encode(raw_proto_bytes);
+        assert_eq!(
+            expected_base64,
+            "EiYKJGUyNDgzMGE3LTVjZDYtNDJmZS05OThiLWVlNTM5ZTcyYjljMw=="
+        );
+
+        // 1. normalize_and_heal_signature 单测
+        assert_eq!(
+            normalize_and_heal_signature(&raw_corrupted_sig),
+            Some(expected_base64.clone())
+        );
+        assert_eq!(
+            normalize_and_heal_signature(&expected_base64),
+            Some(expected_base64.clone())
+        );
+        assert_eq!(normalize_and_heal_signature(SENTINEL_SIGNATURE), None);
+        assert_eq!(normalize_and_heal_signature("short"), None);
+
+        // 2. save_tool_signature 会自动自愈为 Base64 存储
+        save_tool_signature(tool_id, &raw_corrupted_sig).unwrap();
+        let loaded_tool_sig = load_tool_signature(tool_id).unwrap();
+        assert_eq!(loaded_tool_sig, Some(expected_base64.clone()));
+
+        // 3. 模拟底层 SQLite 已经脏存了原始二进制签名的历史数据
+        let conn = connect_db().unwrap();
+        conn.execute(
+            "INSERT OR REPLACE INTO tool_signatures (tool_id, signature, created_at) VALUES (?1, ?2, ?3)",
+            params!["call_legacy_dirty", &raw_corrupted_sig, 1000],
+        ).unwrap();
+        drop(conn);
+
+        // load_tool_signature 读出时自动识别并修复，且反向写回 SQLite
+        let loaded_dirty = load_tool_signature("call_legacy_dirty").unwrap();
+        assert_eq!(loaded_dirty, Some(expected_base64.clone()));
+
+        // 验证 SQLite 中确实已被写回替换为标准 Base64 格式
+        let conn = connect_db().unwrap();
+        let in_db: String = conn
+            .query_row(
+                "SELECT signature FROM tool_signatures WHERE tool_id = 'call_legacy_dirty'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(in_db, expected_base64);
+
+        // 4. thinking_records 自愈与反向写回测试
+        let think_conn = thinking_db().unwrap();
+        think_conn.execute(
+            "INSERT INTO thinking_records (session_key, fingerprint, thought, signature, tool_ids, tool_names, visible, created_at, primary_tool_id, causal_tool_id)
+             VALUES (?1, 'fp_dirty', ?2, ?3, '[\"call_corrupted_1\"]', '[]', 'vis', 1000, 'call_corrupted_1', 'call_corrupted_1')",
+            params![session_key, pack_thought("thinking content"), &raw_corrupted_sig],
+        ).unwrap();
+        drop(think_conn);
+
+        // load_thinking_by_tool_id 点查时触发反向自愈写回
+        let loaded_rec = load_thinking_by_tool_id(session_key, "call_corrupted_1")
+            .unwrap()
+            .unwrap();
+        assert_eq!(loaded_rec.signature, Some(expected_base64.clone()));
+
+        // 验证 thinking_records 表中 signature 字段已被更新为自愈后的 Base64
+        let think_conn = thinking_db().unwrap();
+        let sig_in_db: String = think_conn
+            .query_row(
+                "SELECT signature FROM thinking_records WHERE session_key = ?1 AND primary_tool_id = 'call_corrupted_1'",
+                params![session_key],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(sig_in_db, expected_base64);
+    }
+
+    #[test]
+    fn test_delete_session_signatures_and_thinking_records_multi_tenant() {
+        let _dir = TestDataDir::new();
+        init_db().unwrap();
+
+        let sig = "EiYKJGUyNDgzMGE3LTVjZDYtNDJmZS05OThiLWVlNTM5ZTcyYjljMw==";
+
+        // 1. 准备多租户会话的思考记录
+        save_thinking_record(
+            "tenant_a:sess-compact",
+            "fp_1",
+            "thought 1",
+            Some(sig),
+            &[],
+            &[],
+            "vis 1",
+        )
+        .unwrap();
+        save_thinking_record(
+            "sess-compact",
+            "fp_2",
+            "thought 2",
+            Some(sig),
+            &[],
+            &[],
+            "vis 2",
+        )
+        .unwrap();
+        save_thinking_record(
+            "tenant_b:sess-other",
+            "fp_3",
+            "thought 3",
+            Some(sig),
+            &[],
+            &[],
+            "vis 3",
+        )
+        .unwrap();
+
+        assert_eq!(
+            load_thinking_records("tenant_a:sess-compact")
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(load_thinking_records("sess-compact").unwrap().len(), 1);
+        assert_eq!(
+            load_thinking_records("tenant_b:sess-other").unwrap().len(),
+            1
+        );
+
+        // 2. 准备会话作用域 tool_signatures
+        let scoped_key1 = format!("sess-compact\u{1f}call_1");
+        let scoped_key2 = format!("tenant_a:sess-compact\u{1f}call_2");
+        let scoped_key3 = format!("sess-other\u{1f}call_3");
+        save_tool_signature(&scoped_key1, sig).unwrap();
+        save_tool_signature(&scoped_key2, sig).unwrap();
+        save_tool_signature(&scoped_key3, sig).unwrap();
+
+        assert!(load_tool_signature(&scoped_key1).unwrap().is_some());
+        assert!(load_tool_signature(&scoped_key2).unwrap().is_some());
+        assert!(load_tool_signature(&scoped_key3).unwrap().is_some());
+
+        // 3. 执行 delete_tool_signatures_for_session("sess-compact")
+        let deleted_tools = delete_tool_signatures_for_session("sess-compact").unwrap();
+        assert_eq!(deleted_tools, 2);
+        assert!(load_tool_signature(&scoped_key1).unwrap().is_none());
+        assert!(load_tool_signature(&scoped_key2).unwrap().is_none());
+        assert!(load_tool_signature(&scoped_key3).unwrap().is_some());
+
+        // 4. 执行 delete_thinking_records_for_session("sess-compact") 支持租户前缀匹配
+        let deleted_records = delete_thinking_records_for_session("sess-compact").unwrap();
+        assert_eq!(deleted_records, 2);
+        assert_eq!(
+            load_thinking_records("tenant_a:sess-compact")
+                .unwrap()
+                .len(),
+            0
+        );
+        assert_eq!(load_thinking_records("sess-compact").unwrap().len(), 0);
+        assert_eq!(
+            load_thinking_records("tenant_b:sess-other").unwrap().len(),
+            1
+        );
+    }
+
+    #[test]
+    fn test_lookup_signature_by_thought_snippet_gzip_compressed() {
+        let _dir = TestDataDir::new();
+        init_db().unwrap();
+
+        let sig = "s".repeat(60);
+        let long_thought = format!(
+            "Start of long thought. {} Here is the unique marker: needle_in_compressed_thought. {} End of thought.",
+            "A".repeat(200),
+            "B".repeat(200)
+        );
+        assert!(long_thought.len() >= MIN_GZIP_THOUGHT);
+
+        save_thinking_record(
+            "sess-gzip-test",
+            "fp_gzip",
+            &long_thought,
+            Some(&sig),
+            &[],
+            &[],
+            "visible",
+        )
+        .unwrap();
+
+        // 验证即使底层以 GZIP1 二进制压缩存储，仍能穿透解压精准定位签名
+        let found = lookup_signature_by_thought_snippet("needle_in_compressed_thought");
+        assert_eq!(found, Some(sig));
+
+        // 不存在的片段应返回 None
+        let not_found = lookup_signature_by_thought_snippet("non_existent_snippet_xyz");
+        assert_eq!(not_found, None);
+    }
 }
 
 #[cfg(test)]
 mod retention_tests {
-    use super::apply_retention_with_connection;
+    use super::*;
     use crate::proxy::config::LogRetentionConfig;
     use rusqlite::Connection;
 
     #[test]
     fn prompt_log_disk_budget_cleanup_and_live_config_reload() {
-        use super::*;
         use crate::proxy::monitor::prompt_log_tests::{sample_log, TestDataDir};
         let _dir = TestDataDir::new();
         init_db().unwrap();
@@ -1229,7 +2404,7 @@ mod retention_tests {
             serde_json::from_str::<LogRetentionConfig>("{}")
                 .unwrap()
                 .max_disk_mb,
-            512
+            1024
         );
         config.proxy.log_retention.max_disk_mb = 8;
         config.proxy.log_retention.max_storage_gb = 0.0;
@@ -1242,7 +2417,7 @@ mod retention_tests {
         config.proxy.log_retention.max_storage_gb = 0.0;
         crate::modules::config::save_app_config(&config).unwrap();
         save_log(sample_log("new", 4096)).unwrap();
-        assert!(get_log_detail("old").unwrap().response_body.is_none());
+        assert!(get_log_detail("old").is_err());
         assert_eq!(
             get_log_detail("new").unwrap().response_body,
             Some("错".repeat(4096))
@@ -1263,13 +2438,38 @@ mod retention_tests {
     }
 
     #[test]
+    fn test_proxy_db_upstream_model_roundtrip() {
+        use crate::proxy::monitor::prompt_log_tests::{sample_log, TestDataDir};
+        let _dir = TestDataDir::new();
+        init_db().unwrap();
+
+        let mut log = sample_log("upstream-test", 100);
+        log.model = Some("gpt-4o".to_string());
+        log.mapped_model = Some("gemini-2.5-pro".to_string());
+        log.upstream_model = Some("gemini-2.5-pro-preview-05-06".to_string());
+
+        save_log(log.clone()).unwrap();
+
+        let detail = get_log_detail("upstream-test").unwrap();
+        assert_eq!(
+            detail.upstream_model.as_deref(),
+            Some("gemini-2.5-pro-preview-05-06")
+        );
+
+        let summaries = get_logs(10).unwrap();
+        let found = summaries.iter().find(|l| l.id == "upstream-test").unwrap();
+        assert_eq!(
+            found.upstream_model.as_deref(),
+            Some("gemini-2.5-pro-preview-05-06")
+        );
+    }
+
+    #[test]
     fn prompt_log_legacy_headroom_rejection_preserves_history_on_retries() {
-        use super::*;
         use crate::proxy::monitor::prompt_log_tests::TestDataDir;
         let _dir = TestDataDir::new();
         let conn = Connection::open(get_proxy_db_path().unwrap()).unwrap();
-        conn.execute_batch("CREATE TABLE request_logs (id TEXT PRIMARY KEY, timestamp INTEGER, method TEXT, url TEXT, status INTEGER, duration INTEGER, model TEXT, error TEXT)").unwrap();
-        init_db().unwrap();
+        conn.execute_batch("CREATE TABLE request_logs (id TEXT PRIMARY KEY, timestamp INTEGER, method TEXT, url TEXT, status INTEGER, duration INTEGER, model TEXT, error TEXT, response_body TEXT)").unwrap();
         assert_eq!(
             conn.pragma_query_value::<i64, _>(None, "auto_vacuum", |r| r.get(0))
                 .unwrap(),
@@ -1305,7 +2505,6 @@ mod retention_tests {
 
     #[test]
     fn prompt_log_reclaims_free_pages_before_deleting_summaries() {
-        use super::*;
         use crate::proxy::monitor::prompt_log_tests::{sample_log, TestDataDir};
         let _dir = TestDataDir::new();
         init_db().unwrap();
@@ -1320,6 +2519,7 @@ mod retention_tests {
         assert!(disk_bytes(&conn).unwrap() > 6 * 1024 * 1024);
         let policy = LogRetentionConfig {
             max_disk_mb: 1,
+            max_storage_gb: 0.0,
             ..LogRetentionConfig::default()
         };
 
@@ -1332,7 +2532,7 @@ mod retention_tests {
                 |r| Ok((r.get(0)?, r.get(1)?)),
             )
             .unwrap();
-        assert_eq!(counts, (3, 0));
+        assert_eq!(counts, (0, 0));
         assert_eq!(
             get_log_detail("new").unwrap().response_body,
             Some("错".repeat(100))
@@ -1372,7 +2572,7 @@ mod retention_tests {
             ..LogRetentionConfig::default()
         };
         let (cleared, deleted) = apply_retention_with_connection(&conn, &policy).unwrap();
-        assert_eq!(cleared, 1);
+        assert_eq!(cleared, 0);
         assert_eq!(deleted, 2);
         let body: Option<String> = conn
             .query_row(
@@ -1381,7 +2581,7 @@ mod retention_tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(body, None);
+        assert_eq!(body, Some("request".to_string()));
         let count: i64 = conn
             .query_row("SELECT COUNT(*) FROM request_logs", [], |row| row.get(0))
             .unwrap();
@@ -1504,8 +2704,9 @@ pub fn get_logs_filtered(
     let sql = if errors_only {
         "SELECT id, timestamp, method, url, status, duration, model, substr(error, 1, 1024),
                 NULL as request_body, NULL as upstream_request_body, NULL as response_body,
-                input_tokens, output_tokens, cached_tokens, account_email, mapped_model, protocol, client_ip, username,
-                NULL as request_headers, NULL as upstream_request_headers, NULL as response_headers
+                input_tokens, output_tokens, cached_tokens, reasoning_tokens, account_email, mapped_model, protocol, client_ip, username,
+                NULL as request_headers, NULL as upstream_request_headers, response_headers,
+                session_id, upstream_model
          FROM request_logs
          WHERE (status < 200 OR status >= 400)
          ORDER BY timestamp DESC
@@ -1513,18 +2714,20 @@ pub fn get_logs_filtered(
     } else if filter.is_empty() {
         "SELECT id, timestamp, method, url, status, duration, model, substr(error, 1, 1024),
                 NULL as request_body, NULL as upstream_request_body, NULL as response_body,
-                input_tokens, output_tokens, cached_tokens, account_email, mapped_model, protocol, client_ip, username,
-                NULL as request_headers, NULL as upstream_request_headers, NULL as response_headers
+                input_tokens, output_tokens, cached_tokens, reasoning_tokens, account_email, mapped_model, protocol, client_ip, username,
+                NULL as request_headers, NULL as upstream_request_headers, response_headers,
+                session_id, upstream_model
          FROM request_logs
          ORDER BY timestamp DESC
          LIMIT ?1 OFFSET ?2"
     } else {
         "SELECT id, timestamp, method, url, status, duration, model, substr(error, 1, 1024),
                 NULL as request_body, NULL as upstream_request_body, NULL as response_body,
-                input_tokens, output_tokens, cached_tokens, account_email, mapped_model, protocol, client_ip, username,
-                NULL as request_headers, NULL as upstream_request_headers, NULL as response_headers
+                input_tokens, output_tokens, cached_tokens, reasoning_tokens, account_email, mapped_model, protocol, client_ip, username,
+                NULL as request_headers, NULL as upstream_request_headers, response_headers,
+                session_id, upstream_model
          FROM request_logs
-         WHERE (url LIKE ?3 OR method LIKE ?3 OR model LIKE ?3 OR CAST(status AS TEXT) LIKE ?3 OR account_email LIKE ?3 OR client_ip LIKE ?3)
+         WHERE (url LIKE ?3 OR method LIKE ?3 OR model LIKE ?3 OR CAST(status AS TEXT) LIKE ?3 OR account_email LIKE ?3 OR client_ip LIKE ?3 OR session_id LIKE ?3)
          ORDER BY timestamp DESC
          LIMIT ?1 OFFSET ?2"
     };
@@ -1563,8 +2766,9 @@ pub fn get_all_logs_for_export() -> Result<Vec<ProxyRequestLog>, String> {
         .prepare(
             "SELECT id, timestamp, method, url, status, duration, model, error,
                 request_body, upstream_request_body, response_body, input_tokens, output_tokens,
-                cached_tokens, account_email, mapped_model, protocol, client_ip, username,
-                request_headers, upstream_request_headers, response_headers
+                cached_tokens, reasoning_tokens, account_email, mapped_model, protocol, client_ip, username,
+                request_headers, upstream_request_headers, response_headers,
+                session_id, upstream_model
          FROM request_logs
          ORDER BY timestamp DESC",
         )

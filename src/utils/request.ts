@@ -19,6 +19,7 @@ const COMMAND_MAPPING: Record<string, { url: string; method: 'GET' | 'POST' | 'D
   'warm_up_all_accounts': { url: '/api/accounts/warmup', method: 'POST' },
   'warm_up_account': { url: '/api/accounts/:accountId/warmup', method: 'POST' },
   'update_account_label': { url: '/api/accounts/:accountId/label', method: 'POST' },
+  'update_account_priority': { url: '/api/accounts/:accountId/priority', method: 'POST' },
   'export_accounts': { url: '/api/accounts/export', method: 'POST' },
   'bind_device_profile': { url: '/api/accounts/:accountId/bind-device', method: 'POST' },
   'get_device_profiles': { url: '/api/accounts/:accountId/device-profiles', method: 'GET' },
@@ -42,17 +43,21 @@ const COMMAND_MAPPING: Record<string, { url: string; method: 'GET' | 'POST' | 'D
   'check_proxy_health': { url: '/api/proxy/health-check/trigger', method: 'POST' },
   'get_preferred_account': { url: '/api/proxy/preferred-account', method: 'GET' },
   'set_preferred_account': { url: '/api/proxy/preferred-account', method: 'POST' },
-  'fetch_zai_models': { url: '/api/zai/models/fetch', method: 'POST' },
   'load_config': { url: '/api/config', method: 'GET' },
+  'get_config': { url: '/api/config', method: 'GET' },
   'save_config': { url: '/api/config', method: 'POST' },
   'get_proxy_stats': { url: '/api/proxy/stats', method: 'GET' },
   'set_proxy_monitor_enabled': { url: '/api/proxy/monitor/toggle', method: 'POST' },
+  'set_proxy_capture_health_logs': { url: '/api/proxy/monitor/health-logs/toggle', method: 'POST' },
+  'test_model_connectivity': { url: '/api/proxy/test-model', method: 'POST' },
 
   // Logs & Monitoring
   'get_proxy_logs_filtered': { url: '/api/logs', method: 'GET' },
   'get_proxy_logs_count_filtered': { url: '/api/logs/count', method: 'GET' },
   'get_proxy_db_disk_size': { url: '/api/logs/disk-size', method: 'GET' },
   'clear_proxy_logs': { url: '/api/logs/clear', method: 'POST' },
+  'clear_thinking_store': { url: '/api/proxy/thinking-store/clear', method: 'POST' },
+  'get_thinking_store_count': { url: '/api/proxy/thinking-store/count', method: 'GET' },
   'get_proxy_log_detail': { url: '/api/logs/:logId', method: 'GET' },
 
   // Debug Console
@@ -70,12 +75,28 @@ const COMMAND_MAPPING: Record<string, { url: string; method: 'GET' | 'POST' | 'D
 
   // OpenCode Sync
   'get_opencode_sync_status': { url: '/api/proxy/opencode/status', method: 'POST' },
+  'get_opencode_providers': { url: '/api/proxy/opencode/providers', method: 'GET' },
   'execute_opencode_sync': { url: '/api/proxy/opencode/sync', method: 'POST' },
   'execute_opencode_openai_sync': { url: '/api/proxy/opencode/openai-sync', method: 'POST' },
+  'execute_opencode_remove_provider': { url: '/api/proxy/opencode/remove-provider', method: 'POST' },
   'execute_opencode_restore': { url: '/api/proxy/opencode/restore', method: 'POST' },
   'execute_opencode_clear': { url: '/api/proxy/opencode/clear', method: 'POST' },
   'get_opencode_config_content': { url: '/api/proxy/opencode/config', method: 'POST' },
   'get_canonical_families': { url: '/api/proxy/opencode/families', method: 'GET' },
+
+  // Hermes Agent provider and model configuration
+  'get_hermes_sync_status': { url: '/api/proxy/hermes/status', method: 'POST' },
+  'execute_hermes_sync': { url: '/api/proxy/hermes/sync', method: 'POST' },
+  'execute_hermes_restore': { url: '/api/proxy/hermes/restore', method: 'POST' },
+  'execute_hermes_clear': { url: '/api/proxy/hermes/clear', method: 'POST' },
+  'get_hermes_config_content': { url: '/api/proxy/hermes/config', method: 'POST' },
+
+  // OpenClaw provider and model configuration (supports v1.0 and v2.0)
+  'get_openclaw_sync_status': { url: '/api/proxy/openclaw/status', method: 'POST' },
+  'execute_openclaw_sync': { url: '/api/proxy/openclaw/sync', method: 'POST' },
+  'execute_openclaw_restore': { url: '/api/proxy/openclaw/restore', method: 'POST' },
+  'execute_openclaw_clear': { url: '/api/proxy/openclaw/clear', method: 'POST' },
+  'get_openclaw_config_content': { url: '/api/proxy/openclaw/config', method: 'POST' },
 
   // Stats
   'get_token_stats_hourly': { url: '/api/stats/token/hourly', method: 'GET' },
@@ -92,6 +113,8 @@ const COMMAND_MAPPING: Record<string, { url: string; method: 'GET' | 'POST' | 'D
 
   // System
   'get_data_dir_path': { url: '/api/system/data-dir', method: 'GET' },
+  'get_internal_error_log_path': { url: '/api/system/error-log-path', method: 'GET' },
+  'get_internal_error_log_disk_size': { url: '/api/system/error-log-size', method: 'GET' },
   'set_data_dir': { url: '/api/system/data-dir', method: 'POST' },
   'get_update_settings': { url: '/api/system/updates/settings', method: 'GET' },
   'save_update_settings': { url: '/api/system/updates/save', method: 'POST' },
@@ -159,6 +182,8 @@ const COMMAND_MAPPING: Record<string, { url: string; method: 'GET' | 'POST' | 'D
   'renew_user_token': { url: '/api/user-tokens/:id/renew', method: 'POST' },
   'delete_user_token': { url: '/api/user-tokens/:id', method: 'DELETE' },
   'update_user_token': { url: '/api/user-tokens/:id', method: 'PATCH' },
+  'get_user_token_stats': { url: '/api/user-tokens/:id/stats', method: 'GET' },
+  'get_user_tokens_ranking': { url: '/api/user-tokens/ranking', method: 'GET' },
 
   // Proxy Pool (Web Mode Fix)
   'get_proxy_pool_config': { url: '/api/proxy/pool/config', method: 'GET' },

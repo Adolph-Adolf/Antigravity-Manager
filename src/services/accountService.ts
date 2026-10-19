@@ -1,6 +1,13 @@
 import i18n from '../i18n';
-import { Account, DeviceProfile, DeviceProfileVersion, QuotaData } from '../types/account';
+import { Account, ActiveClientsStatus, DeviceProfile, DeviceProfileVersion, QuotaData } from '../types/account';
 import { request as invoke } from '../utils/request';
+
+export async function updateAccountPriority(accountId: string, priority: number): Promise<void> {
+    if (!Number.isInteger(priority) || priority < 1 || priority > 100) {
+        throw new Error(i18n.t('accounts.priority_invalid'));
+    }
+    await invoke('update_account_priority', { accountId, priority });
+}
 
 // 检查环境 (可选)
 function ensureTauriEnvironment() {
@@ -22,6 +29,11 @@ export async function listAccounts(): Promise<Account[]> {
 
 export async function getCurrentAccount(): Promise<Account | null> {
     return await invoke('get_current_account');
+}
+
+export async function getActiveClientsStatus(): Promise<ActiveClientsStatus> {
+    const res = await invoke<ActiveClientsStatus>('get_active_clients_status');
+    return res || {};
 }
 
 export async function addAccount(email: string, refreshToken: string): Promise<Account> {
@@ -220,4 +232,3 @@ export async function exportAccounts(accountIds: string[]): Promise<ExportAccoun
 export async function updateAccountLabel(accountId: string, label: string): Promise<void> {
     return await invoke('update_account_label', { accountId, label });
 }
-

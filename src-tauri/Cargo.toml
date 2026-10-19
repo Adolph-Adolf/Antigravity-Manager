@@ -1,6 +1,6 @@
 [package]
 name = "antigravity-tools"
-version = "4.7.6"
+version = "4.9.9-beta.1"
 description = "Antigravity Tools"
 authors = ["you"]
 license = "CC-BY-NC-SA-4.0"
@@ -23,6 +23,7 @@ tauri = { version = "^2.2.5", features = ["tray-icon", "image-png"] }
 tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
+yaml-rt = { version = "0.3.1", default-features = false }
 uuid = { version = "1.10", features = ["v4", "serde"] }
 chrono = "0.4"
 dirs = "5.0"
@@ -54,10 +55,10 @@ eventsource-stream = "0.2"
 dashmap = "6.1"
 anyhow = "1.0"
 futures = "0.3"
-rand = "0.8"                        # 生成 sessionId 和 mock project_id
+rand = "0.8"                        # 生成 sessionId �?mock project_id
 async-stream = "0.3.6"              # 简化异步流生成
 regex = "1.12.2"                    # Duration 解析
-once_cell = "1.19"                  # 静态初始化 (模型映射表)
+once_cell = "1.19"                  # 静态初始化 (模型映射�?
 pin-project = "1.1"                 # Pin 投影辅助
 bytes = "1.5"                       # SSE 字节操作
 tauri-plugin-single-instance = { version = "2.3.6", features = ["deep-link"] }
@@ -80,6 +81,7 @@ machine-uid = "0.5.4"
 plist = "1.7"
 rquest = { version = "5.1.0", features = ["json", "stream", "socks", "cookies"] }
 rquest-util = "2.2.1"
+time = { version = "0.3", features = ["formatting", "parsing"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 gtk = "0.18"
@@ -90,3 +92,4 @@ custom-protocol = ["tauri/custom-protocol"]
 
 [dev-dependencies]
 tempfile = "3.10"
+tokio = { version = "1", features = ["test-util"] }

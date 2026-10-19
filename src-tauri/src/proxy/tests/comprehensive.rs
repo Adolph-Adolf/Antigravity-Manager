@@ -33,11 +33,13 @@ mod tests {
                 type_: "enabled".to_string(),
                 budget_tokens: Some(1024),
                 effort: None,
+                display: None,
             }),
             metadata: None,
             output_config: None,
             size: None,
             quality: None,
+            tool_choice: None,
         };
 
         // 2. 执行转换

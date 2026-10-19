@@ -20,6 +20,10 @@ pub struct AppConfig {
     pub antigravity_args: Option<Vec<String>>,      // [NEW] Antigravity startup arguments
     #[serde(default)]
     pub auto_launch: bool,     // Launch on startup
+    /// Login-item launches stay in the tray. Missing values stay on so existing
+    /// autostart entries, which already pass `--minimized`, keep that behavior.
+    #[serde(default = "default_quiet_autostart")]
+    pub quiet_autostart: bool,
     #[serde(default)]
     pub scheduled_warmup: ScheduledWarmupConfig, // [NEW] Scheduled warmup configuration
     #[serde(default)]
@@ -32,6 +36,22 @@ pub struct AppConfig {
     pub hidden_menu_items: Vec<String>, // Hidden menu item path list
     #[serde(default)]
     pub cloudflared: CloudflaredConfig, // [NEW] Cloudflared configuration
+    #[serde(default)]
+    pub lightweight_mode: bool, // [NEW] Lightweight mode: destroy webview on minimize/close to tray
+    #[serde(default)]
+    pub suggestion_delete_thinking_store: Option<bool>, // [NEW] 建议删除历史思考块缓存开关
+    #[serde(default)]
+    pub thinking_cleanup_dismissed: Option<bool>, // [NEW] 用户是否已确认/忽略该建议
+    #[serde(default)]
+    pub dismissed_thinking_cleanup_version: Option<String>, // [NEW] 用户已确认或忽略建议的目标版本号
+    #[serde(default)]
+    pub auto_switch_classic_depleted: bool, // [NEW] 兼容旧版开关
+    #[serde(default)]
+    pub classic_auto_switch: ClassicAutoSwitchConfig, // [NEW] 经典款配额自动热切换配置
+}
+
+fn default_quiet_autostart() -> bool {
+    true
 }
 
 /// Scheduled warmup configuration
@@ -108,6 +128,43 @@ impl Default for QuotaProtectionConfig {
     }
 }
 
+/// Classic auto-switch configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClassicAutoSwitchConfig {
+    /// Whether classic auto switch is enabled
+    pub enabled: bool,
+    /// Quota threshold percentage (0-99). Trigger switch when quota <= threshold
+    #[serde(default = "default_classic_auto_switch_threshold")]
+    pub threshold_percentage: u32,
+    /// List of monitored models
+    #[serde(default = "default_classic_monitored_models")]
+    pub monitored_models: Vec<String>,
+}
+
+fn default_classic_auto_switch_threshold() -> u32 {
+    0
+}
+
+fn default_classic_monitored_models() -> Vec<String> {
+    vec!["gemini".to_string(), "claude".to_string()]
+}
+
+impl ClassicAutoSwitchConfig {
+    pub fn new() -> Self {
+        Self {
+            enabled: false,
+            threshold_percentage: 0,
+            monitored_models: default_classic_monitored_models(),
+        }
+    }
+}
+
+impl Default for ClassicAutoSwitchConfig {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Pinned quota models configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PinnedQuotaModelsConfig {
@@ -121,7 +178,7 @@ fn default_pinned_models() -> Vec<String> {
         "gemini-3-pro-high".to_string(),
         "gemini-3-flash".to_string(),
         "gemini-3.1-flash-image".to_string(),
-        "claude-sonnet-4-6-thinking".to_string(),
+        "claude-sonnet-4-6".to_string(),
     ]
 }
 
@@ -150,7 +207,7 @@ pub struct CircuitBreakerConfig {
     #[serde(default = "default_backoff_steps")]
     pub backoff_steps: Vec<u64>,
 
-    /// Lock account until quota reset time when 5-hour rolling or weekly quota reaches 0
+    /// Optional 5h zero-quota lock; exhausted weekly quota always blocks scheduling.
     #[serde(default = "default_lock_on_zero_quota")]
     pub lock_on_zero_quota: bool,
 }
@@ -195,12 +252,19 @@ impl AppConfig {
             antigravity_cli_executable: None,
             antigravity_args: None,
             auto_launch: false,
+            quiet_autostart: true,
             scheduled_warmup: ScheduledWarmupConfig::default(),
             quota_protection: QuotaProtectionConfig::default(),
             pinned_quota_models: PinnedQuotaModelsConfig::default(),
             circuit_breaker: CircuitBreakerConfig::default(),
             hidden_menu_items: Vec::new(),
             cloudflared: CloudflaredConfig::default(),
+            lightweight_mode: false,
+            suggestion_delete_thinking_store: None,
+            thinking_cleanup_dismissed: None,
+            dismissed_thinking_cleanup_version: None,
+            auto_switch_classic_depleted: false,
+            classic_auto_switch: ClassicAutoSwitchConfig::default(),
         }
     }
 }
@@ -224,5 +288,19 @@ mod tests {
             let restored: AppConfig = serde_json::from_str(&saved).unwrap();
             assert_eq!(restored.language, language);
         }
+    }
+
+    #[test]
+    fn quiet_autostart_defaults_to_true_when_missing() {
+        let mut config = AppConfig::new();
+        config.quiet_autostart = false;
+        let mut value = serde_json::to_value(&config).unwrap();
+        value.as_object_mut().unwrap().remove("quiet_autostart");
+        let restored: AppConfig = serde_json::from_value(value).unwrap();
+        assert!(restored.quiet_autostart);
+
+        let saved = serde_json::to_string(&config).unwrap();
+        let restored: AppConfig = serde_json::from_str(&saved).unwrap();
+        assert!(!restored.quiet_autostart);
     }
 }

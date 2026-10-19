@@ -18,6 +18,8 @@ pub struct ProxyRequestLog {
     pub duration: u64,                // ms
     pub model: Option<String>,        // 客户端请求的模型名
     pub mapped_model: Option<String>, // 实际路由后使用的模型名
+    #[serde(default)]
+    pub upstream_model: Option<String>,
     pub account_email: Option<String>,
     pub client_ip: Option<String>, // 客户端 IP 地址
     pub error: Option<String>,
@@ -33,8 +35,11 @@ pub struct ProxyRequestLog {
     pub input_tokens: Option<u32>,
     pub output_tokens: Option<u32>,
     pub cached_tokens: Option<u32>,
+    pub reasoning_tokens: Option<u32>,
     pub protocol: Option<String>, // 协议类型: "openai", "anthropic", "gemini"
     pub username: Option<String>, // User token username
+    #[serde(default)]
+    pub session_id: Option<String>, // 会话标识 (如 sess-xxx)
 }
 
 #[cfg(test)]
@@ -52,16 +57,35 @@ pub(crate) mod prompt_log_tests {
     }
 
     // Tests using ABV_DATA_DIR run serially and restore the previous process setting.
+    // Unified with crate::modules::account::SHARED_TEST_ENV_LOCK to prevent split-brain mutex race.
+    thread_local! {
+        static REENTRANCY_DEPTH: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    }
+
     pub(crate) struct TestDataDir {
+        _guard: Option<std::sync::MutexGuard<'static, ()>>,
         _dir: tempfile::TempDir,
         previous: Option<std::ffi::OsString>,
     }
     impl TestDataDir {
         pub(crate) fn new() -> Self {
+            let depth = REENTRANCY_DEPTH.get();
+            let guard = if depth == 0 {
+                Some(
+                    crate::modules::account::SHARED_TEST_ENV_LOCK
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner()),
+                )
+            } else {
+                None
+            };
+            REENTRANCY_DEPTH.set(depth + 1);
+
             let dir = tempfile::tempdir().unwrap();
             let previous = std::env::var_os("ABV_DATA_DIR");
             std::env::set_var("ABV_DATA_DIR", dir.path());
             Self {
+                _guard: guard,
                 _dir: dir,
                 previous,
             }
@@ -73,6 +97,10 @@ pub(crate) mod prompt_log_tests {
                 std::env::set_var("ABV_DATA_DIR", previous);
             } else {
                 std::env::remove_var("ABV_DATA_DIR");
+            }
+            let depth = REENTRANCY_DEPTH.get();
+            if depth > 0 {
+                REENTRANCY_DEPTH.set(depth - 1);
             }
         }
     }
@@ -86,6 +114,7 @@ pub(crate) mod prompt_log_tests {
             stats: RwLock::new(ProxyStats::default()),
             max_logs: 2,
             enabled: Arc::new(AtomicBool::new(true)),
+            capture_health_logs: Arc::new(AtomicBool::new(false)),
             app_handle: None,
         };
         let log = sample_log("detail", 4096);
@@ -105,6 +134,54 @@ pub(crate) mod prompt_log_tests {
         monitor.log_request(sample_log("disabled", 4096)).await;
         assert!(crate::modules::proxy_db::get_log_detail("disabled").is_err());
     }
+
+    #[test]
+    fn test_proxy_request_log_upstream_model_serialization() {
+        let json_data = serde_json::json!({
+            "id": "test-123",
+            "timestamp": 1234567890,
+            "method": "POST",
+            "url": "/v1/chat/completions",
+            "status": 200,
+            "duration": 50,
+            "model": "gpt-4o",
+            "mapped_model": "gemini-2.5-pro",
+            "upstream_model": "gemini-2.5-pro-preview-05-06"
+        });
+
+        let log: ProxyRequestLog = serde_json::from_value(json_data).unwrap();
+        assert_eq!(
+            log.upstream_model.as_deref(),
+            Some("gemini-2.5-pro-preview-05-06")
+        );
+
+        // Summary retains upstream_model
+        let summary = log.summary();
+        assert_eq!(
+            summary.upstream_model.as_deref(),
+            Some("gemini-2.5-pro-preview-05-06")
+        );
+
+        // Round-trip serialization
+        let serialized = serde_json::to_string(&log).unwrap();
+        let deserialized: ProxyRequestLog = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(
+            deserialized.upstream_model.as_deref(),
+            Some("gemini-2.5-pro-preview-05-06")
+        );
+
+        // Default when omitted
+        let json_no_upstream = serde_json::json!({
+            "id": "test-456",
+            "timestamp": 1234567890,
+            "method": "POST",
+            "url": "/v1/chat/completions",
+            "status": 200,
+            "duration": 50
+        });
+        let log_default: ProxyRequestLog = serde_json::from_value(json_no_upstream).unwrap();
+        assert_eq!(log_default.upstream_model, None);
+    }
 }
 
 impl ProxyRequestLog {
@@ -118,6 +195,7 @@ impl ProxyRequestLog {
             duration: self.duration,
             model: self.model.clone(),
             mapped_model: self.mapped_model.clone(),
+            upstream_model: self.upstream_model.clone(),
             account_email: self.account_email.clone(),
             client_ip: self.client_ip.clone(),
             error: self
@@ -129,12 +207,14 @@ impl ProxyRequestLog {
             response_body: None,
             request_headers: None,
             upstream_request_headers: None,
-            response_headers: None,
+            response_headers: self.response_headers.clone(),
             input_tokens: self.input_tokens,
             output_tokens: self.output_tokens,
             cached_tokens: self.cached_tokens,
+            reasoning_tokens: self.reasoning_tokens,
             protocol: self.protocol.clone(),
             username: self.username.clone(),
+            session_id: self.session_id.clone(),
         }
     }
 }
@@ -143,6 +223,7 @@ impl ProxyRequestLog {
 pub(crate) struct UpstreamCapture {
     body: Option<String>,
     headers: Option<String>,
+    attempts: Option<Vec<crate::proxy::upstream::client::FallbackAttemptLog>>,
 }
 
 #[derive(Clone, Default)]
@@ -184,6 +265,16 @@ impl UpstreamRequestBodyHolder {
 
     pub fn take_headers(&self) -> Option<String> {
         self.0.lock().ok().and_then(|mut g| g.headers.take())
+    }
+
+    pub fn set_attempts(&self, attempts: Vec<crate::proxy::upstream::client::FallbackAttemptLog>) {
+        if let Ok(mut lock) = self.0.lock() {
+            lock.attempts = Some(attempts);
+        }
+    }
+
+    pub fn take_attempts(&self) -> Option<Vec<crate::proxy::upstream::client::FallbackAttemptLog>> {
+        self.0.lock().ok().and_then(|mut g| g.attempts.take())
     }
 }
 
@@ -238,6 +329,7 @@ pub struct ProxyMonitor {
     pub stats: RwLock<ProxyStats>,
     pub max_logs: usize,
     pub enabled: Arc<AtomicBool>,
+    pub capture_health_logs: Arc<AtomicBool>,
     app_handle: Option<tauri::AppHandle>,
 }
 
@@ -281,6 +373,10 @@ impl ProxyMonitor {
                     tracing::error!("Failed to cleanup thinking records: {}", e);
                 }
             }
+            crate::modules::logger::sync_internal_error_log_budget_from_config();
+            if let Err(e) = crate::modules::logger::apply_internal_error_log_retention() {
+                tracing::error!("Failed to apply internal error log retention: {}", e);
+            }
         });
 
         tokio::spawn(async {
@@ -296,11 +392,14 @@ impl ProxyMonitor {
                     let retention_res = crate::modules::proxy_db::apply_retention(&retention);
                     let thinking_res =
                         crate::modules::proxy_db::cleanup_old_thinking_records(thinking_days);
-                    (retention_res, thinking_res)
+                    crate::modules::logger::sync_internal_error_log_budget_from_config();
+                    let error_log_res =
+                        crate::modules::logger::apply_internal_error_log_retention();
+                    (retention_res, thinking_res, error_log_res)
                 })
                 .await;
                 match result {
-                    Ok((retention_res, thinking_res)) => {
+                    Ok((retention_res, thinking_res, error_log_res)) => {
                         match retention_res {
                             Ok((cleared, deleted)) => {
                                 if cleared > 0 || deleted > 0 {
@@ -325,6 +424,9 @@ impl ProxyMonitor {
                         } else if let Err(e) = thinking_res {
                             tracing::error!("Failed to cleanup thinking records: {}", e);
                         }
+                        if let Err(e) = error_log_res {
+                            tracing::error!("Failed to apply internal error log retention: {}", e);
+                        }
                     }
                     Err(error) => tracing::error!("Proxy log retention task failed: {}", error),
                 }
@@ -336,6 +438,7 @@ impl ProxyMonitor {
             stats: RwLock::new(ProxyStats::default()),
             max_logs,
             enabled: Arc::new(AtomicBool::new(false)), // Default to disabled
+            capture_health_logs: Arc::new(AtomicBool::new(false)), // Default to false
             app_handle,
         }
     }
@@ -348,6 +451,14 @@ impl ProxyMonitor {
         self.enabled.load(Ordering::Relaxed)
     }
 
+    pub fn set_capture_health_logs(&self, enabled: bool) {
+        self.capture_health_logs.store(enabled, Ordering::Relaxed);
+    }
+
+    pub fn is_capture_health_logs(&self) -> bool {
+        self.capture_health_logs.load(Ordering::Relaxed)
+    }
+
     pub async fn log_request(&self, log: ProxyRequestLog) {
         if let (Some(account), Some(input), Some(output)) =
             (&log.account_email, log.input_tokens, log.output_tokens)
@@ -355,9 +466,10 @@ impl ProxyMonitor {
             let model = log.model.clone().unwrap_or_else(|| "unknown".to_string());
             let account = account.clone();
             let cached = log.cached_tokens.unwrap_or(0);
+            let reasoning = log.reasoning_tokens.unwrap_or(0);
             tokio::task::spawn_blocking(move || {
                 if let Err(e) = crate::modules::token_stats::record_usage(
-                    &account, &model, input, output, cached,
+                    &account, &model, input, output, cached, reasoning,
                 ) {
                     tracing::debug!("Failed to record token stats: {}", e);
                 }
